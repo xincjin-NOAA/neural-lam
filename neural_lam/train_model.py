@@ -3,6 +3,7 @@ import json
 import random
 import time
 from argparse import ArgumentParser
+import os
 
 # Third-party
 import pytorch_lightning as pl
@@ -13,6 +14,7 @@ from lightning_fabric.utilities import seed
 from . import WeatherDataset, config, utils
 from .models import GraphLAM, HiLAM, HiLAMParallel
 
+torch.set_default_dtype(torch.float32) #added by clt
 MODELS = {
     "graph_lam": GraphLAM,
     "hi_lam": HiLAM,
@@ -20,6 +22,22 @@ MODELS = {
 }
 
 
+def timing_decorator(func):
+    """
+    A decorator that tracks execution time before and after function execution.
+    """
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        # Print execution time and resource usage
+        print(f"Function '{func.__name__}' took {execution_time:.6f} seconds to execute.")
+        return result
+    return wrapper
+
+
+@timing_decorator
 def main(input_args=None):
     """
     Main function for training and evaluating models
@@ -189,7 +207,7 @@ def main(input_args=None):
     parser.add_argument(
         "--val_steps_to_log",
         type=list,
-        default=[1, 2, 3, 5, 10, 15, 19],
+        default=[1, 2, 3 ],
         help="Steps to log val loss for (default: [1, 2, 3, 5, 10, 15, 19])",
     )
     parser.add_argument(
@@ -240,7 +258,8 @@ def main(input_args=None):
         shuffle=True,
         num_workers=args.n_workers,
     )
-    max_pred_length = (65 // args.step_length) - 2  # 19
+#clt    max_pred_length = (65 // args.step_length) - 2  # 19
+    max_pred_length = (19 // args.step_length) - 2  # 19
     val_loader = torch.utils.data.DataLoader(
         WeatherDataset(
             config_loader.dataset.name,
@@ -256,7 +275,7 @@ def main(input_args=None):
     )
 
     # Instantiate model + trainer
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() : 
         device_name = "cuda"
         torch.set_float32_matmul_precision(
             "high"
@@ -264,6 +283,7 @@ def main(input_args=None):
     else:
         device_name = "cpu"
 
+#cltdebug    device_name = "cpu" #cltthinkdeb 
     # Load model parameters Use new args for model
     model_class = MODELS[args.model]
     model = model_class(args)
@@ -275,6 +295,7 @@ def main(input_args=None):
         f"{prefix}{args.model}-{args.processor_layers}x{args.hidden_dim}-"
         f"{time.strftime('%m_%d_%H')}-{random_run_id:04d}"
     )
+    print ("thinkdeb run_name is ",run_name)
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
         dirpath=f"saved_models/{run_name}",
         filename="min_val_loss",
@@ -282,26 +303,75 @@ def main(input_args=None):
         mode="min",
         save_last=True,
     )
-    logger = pl.loggers.WandbLogger(
-        project=args.wandb_project, name=run_name, config=args
-    )
+    #logger = pl.loggers.WandbLogger(
+    #    project=args.wandb_project, name=run_name, config=args
+    #)
+ #from pytorch_lightning.callbacks import Callback
+#maybe can also use TensorBoardLogger
+    class LossTracker(pl.callbacks.Callback):
+        def __init__(self):
+            super().__init__()
+            self.train_losses = []
+            self.val_losses = []
+            self.epochs = []
+            
+        def on_train_epoch_end(self, trainer, pl_module):
+            # Get the current epoch number and loss
+            epoch = trainer.current_epoch
+            train_loss = trainer.callback_metrics.get('train_loss')
+            if isinstance(train_loss, torch.Tensor):
+                train_loss = train_loss.item()
+                
+            self.epochs.append(epoch)
+            self.train_losses.append(train_loss)
+                
+        def on_validation_epoch_end(self, trainer, pl_module):
+            val_loss = trainer.callback_metrics.get('val_mean_loss')
+            if isinstance(val_loss, torch.Tensor):
+                val_loss = val_loss.item()
+            self.val_losses.append(val_loss)
+            
+        def get_losses(self):
+            return {
+                'epochs': self.epochs,
+                'train_losses': self.train_losses,
+                'val_losses': self.val_losses
+            }
+
+    loss_tracker = LossTracker()
+    print("thinkdeb type of precision ",type(args.precision),"value is ",args.precision)
+    print("thinkdeb checkpoint_callback",checkpoint_callback)
+    print(f"Checkpoint Callback Configuration:")
+    print(f"  dirpath: {checkpoint_callback.dirpath}")
+    print(f"  filename: {checkpoint_callback.filename}")
+    print(f"  monitor: {checkpoint_callback.monitor}")
+    print(f"  save_top_k: {checkpoint_callback.save_top_k}")
+    print(f"  mode: {checkpoint_callback.mode}")
+    print(f"  save_last: {checkpoint_callback.save_last}")
+    print(f"  every_n_epochs: {checkpoint_callback.every_n_epochs}")
+    ntasks_per_node = int(os.getenv("SLURM_NTASKS_PER_NODE", 1))
+    print(f'num of tasks: {ntasks_per_node}')
+    num_nodes = int(os.getenv("SLURM_NNODES", 1))  # Defaults to 1 if not set by SLURM
+
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         deterministic=True,
-        strategy="ddp",
+        strategy="auto", #        strategy="ddp",
         accelerator=device_name,
-        logger=logger,
+        devices=ntasks_per_node,
+        num_nodes=num_nodes,
+        # logger=logger,
         log_every_n_steps=1,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback,loss_tracker],  # Add the loss tracker
         check_val_every_n_epoch=args.val_interval,
         precision=args.precision,
     )
 
     # Only init once, on rank 0 only
-    if trainer.global_rank == 0:
-        utils.init_wandb_metrics(
-            logger, args.val_steps_to_log
-        )  # Do after wandb.init
+    #if trainer.global_rank == 0:
+    #    utils.init_wandb_metrics(
+    #        logger, args.val_steps_to_log
+    #    )  # Do after wandb.init
 
     if args.eval:
         if args.eval == "val":
@@ -321,15 +391,89 @@ def main(input_args=None):
             )
 
         print(f"Running evaluation on {args.eval}")
-        trainer.test(model=model, dataloaders=eval_loader, ckpt_path=args.load)
-    else:
         # Train model
+#        for batch in eval_loader:
+#                print(f"Batch contains {len(batch)} elements")
+#                for i, element in enumerate(batch):
+#                    print(f"Element {i}: Type: {type(element)}")
+#                    if isinstance(element, torch.Tensor):  # If it's a tensor, print its shape and dtype
+#                        print(f"Element {i}: Shape: {element.shape}, Dtype: {element.dtype}")
+#                    else:
+#                        print(f"Element {i}: Content: {element}")
+#        for batch in eval_loader:
+#                print(f"val Batch contains {len(batch)} elements")
+#                for i, element in enumerate(batch):
+#                    print(f"val Element {i}: Type: {type(element)}")
+#                    if isinstance(element, torch.Tensor):  # If it's a tensor, print its shape and dtype
+#                        #print(f"val Element {i}: Shape: {element.shape}, Dtype: {element.dtype}")
+#                    else:
+#                        print(f"val Element {i}: Content: {element}")
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') #clt
+        print(f'thinkdebUsing device: {device}')
+        model.to(device)                                                      #clt
+        model=model.float() #added by Ting to avoid errors of different types in model.
+        trainer.test(model=model, dataloaders=eval_loader, ckpt_path=args.load)
+        print("thinkdeb after trainer.test")
+    else:
+
+        # Train model
+        for batch in train_loader:
+                print(f"Batch contains {len(batch)} elements")
+                for i, element in enumerate(batch):
+                    print(f"Element {i}: Type: {type(element)}")
+                    if isinstance(element, torch.Tensor):  # If it's a tensor, print its shape and dtype
+                        print(f"Element {i}: Shape: {element.shape}, Dtype: {element.dtype}")
+                    else:
+                        print(f"Element {i}: Content: {element}")
+        for batch in val_loader:
+                print(f"val Batch contains {len(batch)} elements")
+                for i, element in enumerate(batch):
+                    print(f"val Element {i}: Type: {type(element)}")
+                    if isinstance(element, torch.Tensor):  # If it's a tensor, print its shape and dtype
+                        print(f"val Element {i}: Shape: {element.shape}, Dtype: {element.dtype}")
+                    else:
+                        print(f"val Element {i}: Content: {element}")
+
+
+
+
+
+                print(f" Batch(lisst) length: {len(batch)}")
+        for name, param in model.named_parameters():
+          print(f"Layer: {name}, Weight dtype: {param.dtype}")
+
+
+#        for batch in train_loader:
+#            print(f"Batch content: {batch}")
+#            break
+
+
+#        for batch in train_loader:
+#            inputs, targets = batch  # This assumes your dataset returns a tuple of (inputs, targets)
+#            print(f"Inputs shape: {inputs.shape}, Inputs dtype: {inputs.dtype}")
+#            print(f"Targets shape: {targets.shape}, Targets dtype: {targets.dtype}")
+        # Ensure inputs and model are on the same device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#clt        device = torch.device('cpu') #thinkdeb555
+        print(f'thinkdebUsing device: {device}')
+        model.to(device)
+        model=model.float() #added by Ting to avoid errors of different types in model.
         trainer.fit(
             model=model,
             train_dataloaders=train_loader,
             val_dataloaders=val_loader,
             ckpt_path=args.load,
         )
+       # After training
+        completed_epochs = trainer.current_epoch
+        print(f"Training completed after {completed_epochs} epochs.")
+# After training, you can access the losses:
+        losses = loss_tracker.get_losses()
+# Or access directly:
+        print("Epochs:", loss_tracker.epochs)
+        print("Training losses:", loss_tracker.train_losses)
+        print("Validation losses:", loss_tracker.val_losses)
+
 
 
 if __name__ == "__main__":
