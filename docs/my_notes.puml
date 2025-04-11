@@ -1,0 +1,182 @@
+@startuml
+skinparam monochrome true
+skinparam linetype polyline
+
+start
+:Parse Arguments;
+if (Select Model) then (graph_lam)
+  :Initialize GraphLAM;
+elseif (hi_lam) then
+  :Initialize HiLAM;
+elseif (hi_lam_parallel) then
+  :Initialize HiLAMParallel;
+endif
+
+:Load Config and Datastore;
+:Set Random Seed;
+:Prepare Weather Data Module;
+:Train/Evaluate Model;
+stop
+@enduml
+
+
+
+@startuml
+skinparam monochrome true
+skinparam linetype polyline
+
+start
+:Select Model Configuration;
+if (Model Type) then (GraphLAM)
+  :Initialize GraphLAM;
+elseif (HiLAM) then
+  :Initialize HiLAM;
+elseif (HiLAM Parallel) then
+  :Initialize HiLAM Parallel;
+endif
+
+:Load Configuration;
+:Set Random Seed;
+:Prepare Data Module;
+
+fork
+  :Configure Training Parameters;
+  :Set Epochs;
+  :Set Learning Rate;
+  :Set Batch Size;
+fork again
+  :Setup Validation Strategy;
+  :Define Validation Interval;
+  :Configure Metrics Tracking;
+end fork
+
+:Initialize PyTorch Lightning Trainer;
+:Start Model Training;
+
+if (Evaluation Mode) then (yes)
+  :Load Checkpoint;
+  :Run Model Assessment;
+  :Generate Performance Reports;
+else (no)
+  :Continue Training;
+endif
+
+:Save Best Model;
+stop
+@enduml
+
+
+
+@startuml
+skinparam monochrome true
+skinparam linetype polyline
+
+start
+:Initialize GraphLAM Model;
+note right: Extends BaseGraphModel
+
+fork
+  :Validate Graph Configuration;
+  if (Hierarchical?) then (yes)
+    #red:Raise Assertion Error;
+    end
+  else (no)
+    :Proceed with Non-Hierarchical Graph;
+  endif
+fork again
+  :Extract Feature Dimensions;
+  note right: Mesh and Edge Feature Sizes
+endfork
+
+:Create Mesh Embedders;
+note right: Multi-Layer Perceptron (MLP)
+- Mesh Static Features
+- Mesh-to-Mesh Edge Features
+
+:Initialize Interaction Networks;
+note right: Multiple Processor Layers
+- Dynamic Interaction Layers
+- Configurable Aggregation
+
+fork
+  :Embed Mesh Nodes;
+  note right: Transform static features
+fork again
+  :Prepare Edge Representations;
+  note right: Process mesh-to-mesh connections
+endfork
+
+:Process Mesh Representation;
+note right: Core Graph Neural Network Step
+- Batch-level Updates
+- Dynamic Feature Integration
+
+:Generate Final Representation;
+note right: Prepared for Downstream Tasks
+- Weather Prediction
+- Atmospheric Modeling
+
+stop
+@enduml
+
+
+@startuml
+skinparam monochrome true
+skinparam linetype polyline
+
+start
+:Initialize ARModel;
+note right: Configurable Weather Prediction Model
+- Configuration Arguments
+- Neural LAM Config
+- Data Storage Object
+
+fork
+  :Preprocess Data;
+  note right: Data Standardization
+  - Static Features
+  - State Features
+fork again
+  :Setup Metrics;
+  note right: Tracking Mechanisms
+  - Training Metrics
+  - Validation Metrics
+  - Test Metrics
+endfork
+
+:Training Preparation;
+note right: Model Configuration
+- Initialize Parameters
+- Prepare Tracking Variables
+
+:Training Loop;
+fork
+  :Process Training Batch;
+  note right: Single Batch Processing
+  - Compute Loss
+  - Log Metrics
+fork again
+  :Validate Model;
+  note right: Performance Evaluation
+  - Validation Metrics
+  - Example Predictions
+endfork
+
+:Checkpoint Management;
+note right: Model State Handling
+- Load Checkpoints
+- Backward Compatibility
+- Optional Optimizer Restoration
+
+:Generate Spatial Loss Map;
+note right: Advanced Evaluation
+- Spatial Performance Analysis
+- Detailed Metric Visualization
+
+:Model Inference;
+note right: Prediction Generation
+- Weather Forecasting
+- Spatial Predictions
+
+stop
+@enduml
