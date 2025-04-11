@@ -1,3 +1,98 @@
+
+@startuml
+title Mesh Graph Creation Process
+
+start
+:Parse Command Line Arguments;
+:Load Configuration;
+:Load Grid Positions;
+
+if (Hierarchical Graph?) then (yes)
+  :Create Multi-Resolution Mesh Graphs with Levels;
+  :Relabel Nodes with Level Index;
+  :Create Inter-Level Mesh Edges;
+else (no)
+  :Create Multi-Resolution Mesh Graphs;
+endif
+
+if (Plot Enabled?) then (yes)
+  :Plot Graphs;
+endif
+
+:Grid-to-Mesh Graph Conversion;
+:Mesh-to-Grid Graph Conversion;
+:Save Graph Edges;
+stop
+@enduml
+
+@startuml
+title Grid Features Preprocessing
+
+start
+:Parse Command Line Arguments;
+:Load Data Configuration;
+:Determine Static Directory Path;
+
+fork
+  :Load Grid Coordinates (nwp_xy.npy);
+  :Normalize Coordinates;
+fork again
+  :Load Geopotential Data (surface_geopotential.npy);
+  :Rescale to [0, 1] Range;
+fork again
+  :Load Border Mask (border_mask.npy);
+  :Convert to Float;
+end fork
+
+:Concatenate Grid Features;
+:Save Features as grid_features.pt;
+
+stop
+@enduml
+
+@startuml
+title Neural LAM: Graph-Based Weather Prediction Model
+
+skinparam monochrome true
+skinparam linetype polyline
+
+actor "Input Data" as InputData
+participant "Graph Loading" as GraphLoading
+participant "Static Feature Extraction" as StaticFeature
+participant "Node Dimension Specification" as NodeDimension
+participant "Grid and Mesh Node Embedding" as NodeEmbedding
+participant "Grid-to-Mesh Embedder" as G2MEmbedder
+participant "Mesh-to-Grid Embedder" as M2GEmbedder
+participant "Graph Neural Network Encoder" as GNNEncoder
+participant "Processor Step" as ProcessorStep
+participant "Graph Neural Network Decoder" as GNNDecoder
+participant "Output Transformation" as OutputTransform
+participant "Prediction/Forecast" as Prediction
+
+InputData -> GraphLoading: Load Graph
+GraphLoading -> StaticFeature: Register Buffers
+StaticFeature -> NodeDimension: Calculate Dimensions
+NodeDimension -> NodeEmbedding: Embed Nodes
+NodeEmbedding -> G2MEmbedder: Transform Features
+G2MEmbedder -> GNNEncoder: Encode
+GNNEncoder -> ProcessorStep: Process
+ProcessorStep -> M2GEmbedder: Transform Features
+M2GEmbedder -> GNNDecoder: Decode
+GNNDecoder -> OutputTransform: Map Output
+OutputTransform -> Prediction: Generate Forecast
+
+note right of GraphLoading
+  Hierarchical Graph Processing
+  Dynamic Feature Extraction
+end note
+
+note right of GNNEncoder
+  Bidirectional Feature Learning
+  Complex Spatial Dependencies
+end note
+
+@enduml
+
 @startuml
 skinparam monochrome true
 skinparam linetype polyline
@@ -18,6 +113,7 @@ endif
 :Train/Evaluate Model;
 stop
 @enduml
+
 
 
 
@@ -179,4 +275,244 @@ note right: Prediction Generation
 - Spatial Predictions
 
 stop
+@enduml
+
+
+
+@startuml
+title Neural LAM Model Class Hierarchy
+
+' Abstract ARModel class
+abstract class ARModel {
+  + __init__(args)
+  + abstract forward()
+  + abstract predict_step()
+}
+
+' Abstract BaseGraphModel
+abstract class BaseGraphModel {
+  - hierarchical: bool
+  - graph_ldict: dict
+
+  + load_graph(args)
+  + register_buffers()
+  + abstract get_num_mesh()
+  + abstract embedd_mesh_nodes()
+  + abstract process_step()
+  + predict_step()
+}
+
+' GraphLAM implementation
+class GraphLAM {
+  - mesh_embedder
+  - m2m_embedder
+  - processor
+
+  + make_same_gnns()
+  + forward()
+}
+
+' HiLAM implementation
+class HiLAM {
+  - up_gnns
+  - down_gnns
+  - same_gnns
+
+  + make_up_gnns()
+  + make_down_gnns()
+  + mesh_down_step()
+  + forward()
+}
+
+' HiLAMParallel implementation
+class HiLAMParallel {
+  - parallel_processor
+
+  + forward()
+}
+
+' Inheritance arrows
+ARModel <|-- BaseGraphModel
+BaseGraphModel <|-- GraphLAM
+BaseGraphModel <|-- HiLAM
+BaseGraphModel <|-- HiLAMParallel
+
+' Notes
+note right of BaseGraphModel
+  Provides core graph-based
+  model infrastructure
+end note
+
+note right of GraphLAM
+  Standard graph-based
+  weather prediction model
+end note
+
+note right of HiLAM
+  Hierarchical graph model
+  with multi-level processing
+end note
+
+note right of HiLAMParallel
+  Parallel processing
+  hierarchical graph model
+end note
+
+@enduml
+
+@startuml
+title Hierarchical Graph Model Class Diagram
+
+abstract class BaseModel {
+  + __init__(args)
+  + {abstract} forward()
+  + {abstract} predict_step()
+}
+
+abstract class BaseGraphModel {
+  - hierarchical: bool
+  - graph_ldict: dict
+  + load_graph(args)
+  + register_buffers()
+  + {abstract} get_num_mesh()
+  + {abstract} embedd_mesh_nodes()
+  + {abstract} process_step()
+}
+
+abstract class BaseHierarchicalGraphModel {
+  - mesh_init_gnns: ModuleList
+  - mesh_read_gnns: ModuleList
+  - mesh_embedders: ModuleList
+  + get_num_mesh()
+  + embedd_mesh_nodes()
+  + process_step()
+  + mesh_up_step()
+  + mesh_down_step()
+}
+
+class HiLAM {
+  + forward()
+  + predict_step()
+}
+
+class HiLAMParallel {
+  + forward()
+  + predict_step()
+}
+
+class GraphLAM {
+  + forward()
+  + predict_step()
+}
+
+BaseModel <|-- BaseGraphModel
+BaseGraphModel <|-- BaseHierarchicalGraphModel
+BaseHierarchicalGraphModel <|-- HiLAM
+BaseHierarchicalGraphModel <|-- HiLAMParallel
+BaseGraphModel <|-- GraphLAM
+
+note right of BaseHierarchicalGraphModel
+  Provides core infrastructure
+  for multi-level graph processing
+end note
+
+note right of HiLAM
+  Hierarchical graph model
+  with sequential processing
+end note
+
+note right of HiLAMParallel
+  Hierarchical graph model
+  with parallel processing
+end note
+
+note right of GraphLAM
+  Standard graph-based
+  weather prediction model
+end note
+
+@enduml
+
+@startuml
+title Neural LAM Training Pipeline
+
+start
+
+:Validate Evaluation Setting;
+note right: Checks for valid train/val/test mode
+
+:Generate Random Run ID;
+note right: Unique identifier for experiment tracking
+
+:Set Random Seed;
+note right: Ensures reproducibility
+
+partition Data Loading {
+    :Create Training DataLoader;
+    note right: WeatherDataset with training configuration
+
+    :Create Validation DataLoader;
+    note right: WeatherDataset with validation configuration
+}
+
+partition Hardware Configuration {
+    if (CUDA Available?) then (yes)
+        :Set Device to CUDA;
+        :Enable High Precision Mode;
+        note right: Tensor Core Optimization
+    else (no)
+        :Set Device to CPU;
+    endif
+}
+
+partition Model Initialization {
+    :Select Model Class;
+    note right: Dynamic model selection based on args
+
+    :Instantiate Model;
+    note right: Passes configuration arguments
+}
+
+stop
+
+@enduml
+
+@startuml
+title Checkpoint Loading Migration Process
+
+start
+
+:Load Checkpoint;
+note right: Receive state dictionary
+
+if (Old Grid MLP Keys Exist?) then (yes)
+    :Identify Grid MLP Keys;
+    note right: Filter keys starting with g2m_gnn.grid_mlp
+
+    partition "Key Transformation" {
+        :Create New Key List;
+        :Replace Key Prefix;
+        note: From g2m_gnn.grid_mlp to encoding_grid_mlp
+    }
+
+    partition "Weight Transfer" {
+        :Copy Weights to New Keys;
+        :Remove Old Keys;
+    }
+else (no)
+    :Skip Transformation;
+endif
+
+if (Restore Optimizer?) then (no)
+    :Generate New Optimizer State;
+    note right: Prevent state incompatibility
+else (yes)
+    :Preserve Existing Optimizer State;
+endif
+
+:Load Modified Checkpoint;
+note right: Complete model restoration
+
+stop
+
 @enduml
