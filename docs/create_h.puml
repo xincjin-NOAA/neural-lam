@@ -1,0 +1,60 @@
+@startuml
+title Create mesh Process Flow
+
+start
+
+:Parse Command Line Arguments;
+note right
+  - data_config
+  - graph name
+  - plot option
+end note
+
+:Load Configuration;
+:Create Output Directory;
+
+partition "Mesh Processing" {
+  :Create Bottom Mesh Graph;
+
+  if (multiscale?) then (yes)
+    :Initialize Graph Lists;
+    while (for each scale level)
+      :Create Down Graph;
+      :Create Up Graph;
+      :Add to Graph Lists;
+      if (plot enabled?) then (yes)
+        :Plot Graphs;
+      endif
+    endwhile
+    :Save Up/Down Edges;
+  else (no)
+    :Create Single M2M Graph;
+    if (plot enabled?) then (yes)
+      :Plot M2M Graph;
+    endif
+    :Save M2M Edges;
+  endif
+}
+
+partition "Grid Processing" {
+  :Calculate Grid Cell Size;
+  :Create Grid Structure;
+
+  partition "Grid-Mesh Interaction" {
+    :Create Grid-to-Mesh (G2M);
+    if (plot enabled?) then (yes)
+      :Plot G2M Graph;
+    endif
+
+    :Create Mesh-to-Grid (M2G);
+    if (plot enabled?) then (yes)
+      :Plot M2G Graph;
+    endif
+  }
+
+  :Save G2M and M2G Edges;
+}
+
+stop
+
+@enduml
