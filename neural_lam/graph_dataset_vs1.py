@@ -5,6 +5,77 @@ import pandas as pd
 from timing_utils import organize_bins_times
 from process_timeseries import extract_features
 
+class GraphDataset(Dataset):
+    def __init__(self, ...):
+        self.mesh_structure = self.create_mesh_structure(
+            xy=grid_coordinates,
+            args=args,
+            graph_dir_path=save_path
+        )
+        g2m_data = self.create_grid_to_mesh(
+            xy=grid_coordinates,
+            G_bottom_mesh=mesh_data['G_bottom_mesh'],
+            all_mesh_nodes=mesh_data['all_mesh_nodes'],
+            args=args
+        )
+        
+        self.g2m_graph = g2m_data['g2m_graph']
+        self.grid_graph = g2m_data['grid_graph']
+
+                # After creating g2m graph
+        m2g_data = self.create_mesh_to_grid(
+            G_g2m=g2m_data['g2m_graph'],
+            vm=mesh_data['G_bottom_mesh'].nodes,
+            vm_xy=mesh_positions,
+            vg_list=grid_nodes,
+            args=args,
+            graph_dir_path=save_path
+        )
+        
+        self.m2g_graph = m2g_data['m2g_graph']
+        self.edge_features = m2g_data['edge_features']
+
+        # Using array of projected coordinates
+coords = np.array([[x1, y1], [x2, y2], ...])  # Lambert projected coordinates
+
+# Optional projection parameters
+proj_params = {
+    'lat_1': 33.0,
+    'lat_2': 45.0,
+    'lat_0': 40.0,
+    'lon_0': -97.0
+}
+
+g2m_data = create_grid_to_mesh(
+    coords, 
+    G_bottom_mesh, 
+    all_mesh_nodes, 
+    args,
+    proj_params=proj_params
+)
+
+
+# Using array of lat/lon pairs
+coords = np.array([[lat1, lon1], [lat2, lon2], ...])
+
+# Optional projection parameters
+proj_params = {
+    'lat_1': 33.0,
+    'lat_2': 45.0,
+    'lat_0': 40.0,
+    'lon_0': -97.0
+}
+
+m2g_data = create_mesh_to_grid(
+    coords,
+    G_g2m,
+    vm,
+    args,
+    graph_dir_path,
+    proj_params=proj_params
+)
+
+
 
 class GraphDataset(torch.utils.data.Dataset):
     def __init__(
