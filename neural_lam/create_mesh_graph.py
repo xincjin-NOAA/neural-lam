@@ -318,20 +318,26 @@ def _create_interlevel_connections(self, G, mesh_levels, first_index_level, args
 
 def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
     """
-    Create Grid-to-Mesh (g2m) graph structure.
+    Create Grid-to-Mesh (g2m) graph structure for heterogeneous observations.
     
     Args:
         coords: Array of shape [N, 2] containing [x, y] coordinates
                or dictionary with {'x': x_array, 'y': y_array}
+               or dictionary with observation types as keys and coordinates as values
         G_bottom_mesh: Bottom level mesh graph
         all_mesh_nodes: All mesh nodes with data
-        args: Arguments containing plot option
+        args: Arguments containing:
+            - cutoff: Radius scale for grid-mesh association (default: 0.67)
+            - num_neighbors: Number of neighbors for KNN fallback
+            - plot: Whether to plot the graph
+            - obs_type: Optional, observation type for type-specific parameters
     
     Returns:
         dict: Contains:
             - g2m_graph: PyTorch Geometric graph for grid-to-mesh
             - grid_graph: Base grid graph
             - mesh_distance: Distance between mesh nodes
+            - edge_weights: Optional weights for heterogeneous observations
     """
     import networkx as nx
     import numpy as np
@@ -367,12 +373,23 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
         
         return self.prepend_node_index(G_grid, 1000)
     
-    def _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm):
-        """Create edges from grid to mesh nodes."""
+    def _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args):
+        """Create edges from grid to mesh nodes with observation-specific parameters."""
+        # Get observation-specific parameters
+        obs_type = args.get('obs_type', None)
+        cutoff = args.get('cutoff', DM_SCALE)
+        num_neighbors = args.get('num_neighbors', 3)
+        
         for v in vm:
             v_pos = vm[v]["pos"]
-            # Find neighbors within radius
-            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * DM_SCALE)
+            
+            # Try radius-based neighbors first
+            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * cutoff)
+            
+            # Fallback to KNN if no neighbors found
+            if not neigh_idxs:
+                distances, indices = kdt_g.query(v_pos, k=num_neighbors)
+                neigh_idxs = indices
             
             for i in neigh_idxs:
                 u = vg_list[i]
@@ -384,6 +401,17 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
                 d = _euclidean_distance(u_pos, v_pos)
                 G_g2m.edges[u, v]["len"] = d
                 G_g2m.edges[u, v]["vdiff"] = v_pos - u_pos
+                
+                # Add observation-specific weight
+                if obs_type:
+                    # Example: Different weights for different observation types
+                    weight = 1.0
+                    if obs_type == 'temperature':
+                        weight = np.exp(-d / (dm * cutoff))
+                    elif obs_type == 'wind':
+                        weight = 1.0 / (1.0 + d)
+                    G_g2m.edges[u, v]["weight"] = weight
+        
         return G_g2m
     
     try:
@@ -431,20 +459,30 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
 
 def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
     """
-    Create Mesh-to-Grid (m2g) graph structure.
+    Create Mesh-to-Grid (m2g) graph structure for heterogeneous observations.
     
     Args:
         coords: Array of shape [N, 2] containing [x, y] coordinates
                or dictionary with {'x': x_array, 'y': y_array}
+               or dictionary with observation types as keys and coordinates as values
         vm: Mesh nodes
-        args: Arguments containing plot option
+        args: Arguments containing:
+            - cutoff: Radius scale for mesh-grid association (default: 0.67)
+            - num_neighbors: Number of neighbors for KNN (default: 4)
+            - plot: Whether to plot the graph
+            - obs_type: Optional, observation type for type-specific parameters
+            - adaptive_neighbors: Optional, whether to use adaptive neighbor count
         graph_dir_path: Path to save graph data
     
     Returns:
         dict: Contains:
             - m2g_graph: PyTorch Geometric graph for mesh-to-grid
             - edge_indices: Edge indices for the graph
-            - edge_features: Edge features (length and vector differences)
+            - edge_features: Edge features including:
+                - length: Edge lengths
+                - vector_diff: Vector differences
+                - weights: Type-specific edge weights
+                - attention_weights: Optional attention weights for each edge
     """
     import networkx as nx
     import numpy as np
@@ -468,13 +506,28 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
             G.add_node(i, pos=pos)
         return G
     
-    def _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points, num_neighbors=4):
-        """Create edges from mesh to grid nodes."""
+    def _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points, args):
+        """Create edges from mesh to grid nodes with observation-specific parameters."""
         kdt_m = KDTree(vm_positions)
+        obs_type = args.get('obs_type', None)
+        cutoff = args.get('cutoff', 0.67)
+        base_num_neighbors = args.get('num_neighbors', 4)
+        adaptive_neighbors = args.get('adaptive_neighbors', False)
         
         for i, v_pos in enumerate(grid_points):
-            # Find k nearest neighbors
-            distances, neigh_idxs = kdt_m.query(v_pos, k=num_neighbors)
+            if adaptive_neighbors:
+                # Use radius search first
+                radius = np.mean([_euclidean_distance(v_pos, p) for p in vm_positions]) * cutoff
+                neigh_idxs = kdt_m.query_ball_point(v_pos, radius)
+                
+                # Fallback to KNN if too few or too many neighbors
+                if len(neigh_idxs) < 2 or len(neigh_idxs) > base_num_neighbors * 2:
+                    distances, neigh_idxs = kdt_m.query(v_pos, k=base_num_neighbors)
+            else:
+                # Use fixed KNN
+                distances, neigh_idxs = kdt_m.query(v_pos, k=base_num_neighbors)
+                if not isinstance(neigh_idxs, list):
+                    neigh_idxs = neigh_idxs.tolist()
             
             for idx in neigh_idxs:
                 u = vm_list[idx]
@@ -487,6 +540,29 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
                 d = _euclidean_distance(u_pos, v_pos)
                 G_m2g.edges[u, v]["len"] = d
                 G_m2g.edges[u, v]["vdiff"] = v_pos - u_pos
+                
+                # Add observation-specific weights
+                if obs_type:
+                    # Calculate type-specific weight
+                    if obs_type == 'temperature':
+                        # Temperature: exponential decay with distance
+                        weight = np.exp(-d / (np.mean([_euclidean_distance(v_pos, p) for p in vm_positions]) * cutoff))
+                    elif obs_type == 'wind':
+                        # Wind: inverse distance with direction consideration
+                        direction = G_m2g.edges[u, v]["vdiff"] / d
+                        weight = 1.0 / (1.0 + d) * np.abs(direction).mean()
+                    elif obs_type == 'pressure':
+                        # Pressure: gaussian weight
+                        weight = np.exp(-0.5 * (d / (np.mean([_euclidean_distance(v_pos, p) for p in vm_positions])))**2)
+                    else:
+                        weight = 1.0
+                    
+                    G_m2g.edges[u, v]["weight"] = weight
+                    
+                    # Add attention weight based on relative position
+                    attention = np.dot(G_m2g.edges[u, v]["vdiff"], v_pos) / (d * np.linalg.norm(v_pos))
+                    G_m2g.edges[u, v]["attention"] = (attention + 1) / 2  # Normalize to [0,1]
+        
         return G_m2g
     
     try:
@@ -523,13 +599,23 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
         # 9. Save edge data
         self.save_edges(pyg_m2g, "m2g", graph_dir_path)
         
+        # Extract edge features
+        edge_features = {
+            'length': torch.tensor([d['len'] for _, _, d in G_m2g.edges(data=True)]),
+            'vector_diff': torch.tensor([d['vdiff'] for _, _, d in G_m2g.edges(data=True)])
+        }
+        
+        # Add observation-specific features if present
+        if args.get('obs_type'):
+            edge_features.update({
+                'weights': torch.tensor([d.get('weight', 1.0) for _, _, d in G_m2g.edges(data=True)]),
+                'attention': torch.tensor([d.get('attention', 0.5) for _, _, d in G_m2g.edges(data=True)])
+            })
+        
         return {
             'm2g_graph': pyg_m2g,
             'edge_indices': pyg_m2g.edge_index,
-            'edge_features': {
-                'length': torch.tensor([d['len'] for _, _, d in G_m2g.edges(data=True)]),
-                'vector_diff': torch.tensor([d['vdiff'] for _, _, d in G_m2g.edges(data=True)])
-            }
+            'edge_features': edge_features
         }
         
     except Exception as e:

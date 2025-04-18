@@ -170,3 +170,65 @@ def combine_features(self, feature_list):
 - Different Densities: Some observations might be sparse, others dense
 - Scale Differences: Different variables have different physical units/scales
 - Temporal Misalignment: Observations might be at different times
+
+### Handling Multi-Location Observations
+
+The model can handle observations from different variables (temperature, wind, pressure, etc.) measured at different locations through a specialized architecture.
+
+#### Architecture Components
+
+1. **Separate Feature Networks**
+   - Individual embedders for each observation type
+   - Type-specific graph networks for mapping to mesh
+   - Customized edge connections based on observation locations
+
+2. **Data Flow**
+   ```python
+   observations -> type-specific embedders -> mesh mapping -> feature combination -> processing
+   ```
+
+#### Key Components
+
+- Observation-specific embedders (MLPs)
+- Dynamic graph construction for each observation type
+- Feature combination layer (attention or learned weights)
+- Mesh-level processing network
+
+#### Implementation Details
+
+- ** Observation Handling**
+  - Each observation type has its own location set
+  - K-nearest neighbor connections to mesh nodes
+  - Dynamic edge updates based on available data
+
+Feature Processing
+```python
+# Example structure
+{
+  'temperature': (temp_locations, temp_values),
+  'wind': (wind_locations, wind_values),
+  'pressure': (pressure_locations, pressure_values)
+}   
+```
+
+#### Graph Construction
+Compute KNN edges for each observation type
+Connect to closest mesh nodes
+Weight edges by distance or other metrics
+
+#### Challenges and Solutions
+- Missing Data
+  - Use masked attention for combining features
+  - Implement fallback to nearby observations
+- Scale Differences
+  - Type-specific normalization
+  - Learned feature scaling in combination layer
+- Spatial Resolution
+  - Adaptive K for different observation densities
+  - Resolution-aware feature weighting
+- Temporal Alignment
+  - Time-aware feature combination
+  - Temporal interpolation when needed
+
+#### Summary
+This architecture allows the model to handle multi-location observations from different variables, with proper handling of missing data, scale differences, and temporal alignment. It provides a flexible framework for incorporating various types of observations into the weather prediction process.   
