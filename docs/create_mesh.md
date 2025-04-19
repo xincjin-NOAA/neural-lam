@@ -60,3 +60,92 @@ This Python script is part of the Neural-LAM system, focused on creating and man
 - Implements position normalization
 - Supports command-line configuration
 - Provides comprehensive graph conversion utilities
+
+```python
+g2m_data = create_grid_to_mesh(
+    coords=coords,
+    G_bottom_mesh=G,
+    all_mesh_nodes=nodes,
+    args={
+        'cutoff': 0.67,
+        'num_neighbors': 3,
+        'include_boundary_mask': True  # Enable boundary mask
+    }
+)
+
+# Access the mask
+boundary_mask = g2m_data['boundary_mask']  # 0 for boundary, 1 for interior
+```
+
+## Boundary Detection and Visualization
+
+The mesh graph system supports boundary detection for both grid-to-mesh (g2m) and mesh-to-grid (m2g) operations. This feature helps identify and visualize boundary nodes in the mesh structure.
+
+### Grid-to-Mesh Boundary Detection
+```python
+# Create grid-to-mesh with boundary mask
+g2m_data = create_grid_to_mesh(
+    coords=coords,
+    G_bottom_mesh=G,
+    all_mesh_nodes=nodes,
+    args={
+        'cutoff': 0.67,
+        'num_neighbors': 3,
+        'include_boundary_mask': True  # Enable boundary detection
+    }
+)
+
+# Access boundary information
+boundary_mask = g2m_data['boundary_mask']  # 0 for boundary, 1 for interior nodes
+```
+
+### Mesh-to-Grid Boundary Detection
+```python
+# Create mesh-to-grid with boundary mask
+m2g_data = create_mesh_to_grid(
+    coords=coords,
+    vm=vertex_map,
+    args={
+        'cutoff': 0.67,
+        'num_neighbors': 3,
+        'include_boundary_mask': True  # Enable boundary detection
+    },
+    graph_dir_path='.'
+)
+
+# Access boundary information
+boundary_mask = m2g_data['boundary_mask']  # 0 for boundary, 1 for interior nodes
+```
+
+### Visualization Options
+
+1. **Basic Boundary Visualization**:
+```python
+plot_graph(g2m_data['g2m_graph'], show_boundary=True)
+```
+
+2. **Detailed Boundary Analysis**:
+```python
+plot_boundary_nodes(g2m_data['g2m_graph'])
+```
+This provides:
+- Color-coded boundary/interior nodes
+- Node degree distribution comparison
+- Edge visualization with transparency
+- Interactive colorbar
+
+### Features
+- Automatic boundary detection using geometric analysis
+- Support for both structured and unstructured meshes
+- Efficient boundary node identification
+- Integration with PyTorch Geometric data structures
+- Comprehensive visualization tools
+
+### Technical Details
+- Uses epsilon-based floating point comparison for robust boundary detection
+- Supports both array and dictionary coordinate inputs
+- Preserves boundary information in PyG graph objects
+- Provides mask tensors compatible with deep learning operations
+
+
+

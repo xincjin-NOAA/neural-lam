@@ -107,6 +107,49 @@ def from_networkx_with_start_index(nx_graph, start_index):
     return pyg_graph
 
 
+def create_boundary_mask(G, coords):
+    """
+    Create a mask for mesh nodes where boundary nodes are 0 and interior nodes are 1.
+    
+    Args:
+        G: NetworkX graph with node positions
+        coords: Array of shape [N, 2] containing [x, y] coordinates
+               or dictionary with {'x': x_array, 'y': y_array}
+    
+    Returns:
+        torch.Tensor: Binary mask where 0 indicates boundary nodes and 1 indicates interior nodes
+    """
+    if isinstance(coords, dict):
+        x_min, x_max = coords['x'].min(), coords['x'].max()
+        y_min, y_max = coords['y'].min(), coords['y'].max()
+    else:
+        x_min, x_max = coords[:, 0].min(), coords[:, 0].max()
+        y_min, y_max = coords[:, 1].min(), coords[:, 1].max()
+    
+    # Add small epsilon to handle floating point comparisons
+    eps = 1e-6
+    x_min -= eps
+    x_max += eps
+    y_min -= eps
+    y_max += eps
+    
+    # Create mask tensor
+    mask = torch.ones(len(G.nodes))
+    
+    # Identify boundary nodes
+    for node in G.nodes:
+        pos = G.nodes[node]['pos']
+        if (
+            abs(pos[0] - x_min) < eps or
+            abs(pos[0] - x_max) < eps or
+            abs(pos[1] - y_min) < eps or
+            abs(pos[1] - y_max) < eps
+        ):
+            mask[node] = 0.0
+    
+    return mask
+
+
 def mk_2d_graph(xy, nx, ny):
     xm, xM = np.amin(xy[0][0, :]), np.amax(xy[0][0, :])
     ym, yM = np.amin(xy[1][:, 0]), np.amax(xy[1][:, 0])
@@ -331,6 +374,7 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
             - num_neighbors: Number of neighbors for KNN fallback
             - plot: Whether to plot the graph
             - obs_type: Optional, observation type for type-specific parameters
+            - include_boundary_mask: Optional, whether to include boundary mask (default: False)
     
     Returns:
         dict: Contains:
@@ -338,6 +382,7 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
             - grid_graph: Base grid graph
             - mesh_distance: Distance between mesh nodes
             - edge_weights: Optional weights for heterogeneous observations
+            - boundary_mask: Optional tensor marking boundary (0) and interior (1) nodes
     """
     import networkx as nx
     import numpy as np
@@ -448,11 +493,21 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
             self.plot_graph(pyg_g2m, title="Grid-to-mesh")
             plt.show()
         
-        return {
+        # Create result dictionary
+        result = {
             'g2m_graph': pyg_g2m,
             'grid_graph': G_grid,
             'mesh_distance': dm
         }
+        
+        # Add boundary mask if requested
+        if args.get('include_boundary_mask', False):
+            boundary_mask = create_boundary_mask(G_bottom_mesh, coords)
+            result['boundary_mask'] = boundary_mask
+            # Add mask to PyG graph as well
+            pyg_g2m.boundary_mask = boundary_mask
+        
+        return result
         
     except Exception as e:
         raise RuntimeError(f"Failed to create grid-to-mesh graph: {e}")
@@ -465,24 +520,21 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
         coords: Array of shape [N, 2] containing [x, y] coordinates
                or dictionary with {'x': x_array, 'y': y_array}
                or dictionary with observation types as keys and coordinates as values
-        vm: Mesh nodes
+        vm: Dictionary of mesh nodes with positions
         args: Arguments containing:
             - cutoff: Radius scale for mesh-grid association (default: 0.67)
             - num_neighbors: Number of neighbors for KNN (default: 4)
             - plot: Whether to plot the graph
             - obs_type: Optional, observation type for type-specific parameters
             - adaptive_neighbors: Optional, whether to use adaptive neighbor count
-        graph_dir_path: Path to save graph data
+            - include_boundary_mask: Optional, whether to include boundary mask (default: False)
     
     Returns:
         dict: Contains:
             - m2g_graph: PyTorch Geometric graph for mesh-to-grid
-            - edge_indices: Edge indices for the graph
-            - edge_features: Edge features including:
-                - length: Edge lengths
-                - vector_diff: Vector differences
-                - weights: Type-specific edge weights
-                - attention_weights: Optional attention weights for each edge
+            - edge_features: Edge features including length and vector differences
+            - edge_weights: Optional weights for heterogeneous observations
+            - boundary_mask: Optional tensor marking boundary (0) and interior (1) nodes
     """
     import networkx as nx
     import numpy as np
@@ -573,7 +625,7 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
         G_m2g = _create_base_grid(grid_points)
         
         # 3. Get mesh nodes positions
-        vm_list = list(vm)
+        vm_list = list(vm.keys())
         vm_positions = np.array([vm[v]["pos"] for v in vm_list])
         
         # 4. Add mesh nodes to graph
@@ -581,7 +633,7 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
             G_m2g.add_node(v, pos=vm_positions[i])
         
         # 5. Create edges from mesh to grid
-        G_m2g = _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points)
+        G_m2g = _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points, args)
         
         # 6. Convert to integers with sorted labels
         G_m2g_int = nx.convert_node_labels_to_integers(
@@ -591,32 +643,45 @@ def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
         # 7. Convert to PyTorch Geometric
         pyg_m2g = from_networkx(G_m2g_int)
         
-        # 8. Optional plotting
-        if args.plot:
-            self.plot_graph(pyg_m2g, title="Mesh-to-grid")
-            plt.show()
-        
-        # 9. Save edge data
-        self.save_edges(pyg_m2g, "m2g", graph_dir_path)
-        
-        # Extract edge features
+        # 8. Save edge features
         edge_features = {
             'length': torch.tensor([d['len'] for _, _, d in G_m2g.edges(data=True)]),
             'vector_diff': torch.tensor([d['vdiff'] for _, _, d in G_m2g.edges(data=True)])
         }
         
+        # Create result dictionary
+        result = {
         # Add observation-specific features if present
         if args.get('obs_type'):
             edge_features.update({
                 'weights': torch.tensor([d.get('weight', 1.0) for _, _, d in G_m2g.edges(data=True)]),
-                'attention': torch.tensor([d.get('attention', 0.5) for _, _, d in G_m2g.edges(data=True)])
+                'attention': torch.tensor([d.get('attention', 1.0) for _, _, d in G_m2g.edges(data=True)])
             })
         
-        return {
+        result = {
             'm2g_graph': pyg_m2g,
-            'edge_indices': pyg_m2g.edge_index,
             'edge_features': edge_features
         }
+        
+        # Add boundary mask if requested
+        if args.get('include_boundary_mask', False):
+            # Create a graph for boundary detection
+            G_mesh = nx.Graph()
+            G_mesh.add_nodes_from([(i, {'pos': pos}) for i, pos in vm.items()])
+            
+            # Create boundary mask
+            boundary_mask = create_boundary_mask(G_mesh, coords)
+            result['boundary_mask'] = boundary_mask
+            # Add mask to PyG graph as well
+            pyg_m2g.boundary_mask = boundary_mask
+        
+        # Optional plotting
+        if args.plot:
+            self.plot_graph(pyg_m2g, title="Mesh-to-grid", 
+                           show_boundary=args.get('include_boundary_mask', False))
+            plt.show()
+        
+        return result
         
     except Exception as e:
         raise RuntimeError(f"Failed to create mesh-to-grid graph: {e}")
