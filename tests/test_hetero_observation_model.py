@@ -5,6 +5,9 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 from neural_lam.models.hetero_observation_model import HeteroObservationGraphModel
+import pytest
+import torch
+from unittest.mock import patch
 
 class TestHeteroObservationModel:
     @pytest.fixture
@@ -14,11 +17,31 @@ class TestHeteroObservationModel:
             def __init__(self):
                 self.hidden_dim = 32
                 self.hidden_layers = 2
+                self.data_config = {
+                    'input_dim': 2,  # 2D coordinates
+                    'output_dim': 1,  # Single output value
+                    'static_dim': 0   # No static features
+                }
+                self.graph = {
+                    'mesh_structure': {
+                        'nodes': 10,  # 10 mesh nodes
+                        'edges': 15,   # 15 mesh edges
+                        'features': 2   # 2D positions
+                    },
+                    'hierarchical': False
+                }
                 self.observation_types = {
                     'temperature': {'dim': 1},
                     'wind': {'dim': 2},
                     'pressure': {'dim': 1}
                 }
+                # ARModel parameters
+                self.output_std = False
+                self.step_length = 1
+                self.restore_opt = False
+                self.n_example_pred = 1
+                self.processor_layers = 3
+                self.mesh_aggr = 'mean'
         return Args()
     
     @pytest.fixture
@@ -63,7 +86,18 @@ class TestHeteroObservationModel:
 
     def test_model_initialization(self, model_args):
         """Test model initialization"""
-        model = HeteroObservationGraphModel(model_args)
+        with patch('neural_lam.models.base_graph_model.utils.load_graph') as mock_load_graph:
+            mock_load_graph.return_value = (False, {
+                'mesh_static_features': torch.randn(10, 2),  # 10 nodes, 2 features each
+                'm2m_features': torch.randn(15, 2),  # 15 edges, 2 features each
+                'm2m_edge_index': torch.randint(0, 10, (2, 15)),  # 15 edges between mesh nodes
+                'g2m_features': torch.randn(20, 2),  # 20 grid-to-mesh edges
+                'g2m_edge_index': torch.randint(0, 10, (2, 20)),
+                'm2g_features': torch.randn(20, 2),  # 20 mesh-to-grid edges
+                'm2g_edge_index': torch.randint(0, 10, (2, 20))
+            })
+            
+            model = HeteroObservationGraphModel(model_args)
         
         # Check observation networks are created
         for obs_type in model_args.observation_types:

@@ -171,42 +171,6 @@ class HeteroObservationGraphModel(BaseGraphModel):
         # Store edge features if available
         if hasattr(dataset, 'edge_features'):
             self.edge_features = dataset.edge_features
-    
-    def create_mesh_graph(self, args):
-        """
-        Create the mesh graph structure using create_mesh utilities.
-        
-        Args:
-            args: Arguments containing mesh configuration
-                - mesh_nx: Number of x points
-                - mesh_ny: Number of y points
-                - domain: Domain configuration for coordinates
-        """
-        from .. import create_mesh
-        import numpy as np
-        
-        # Get domain coordinates
-        xy = np.array([
-            [args.domain.xmin + i * args.domain.dx for i in range(args.mesh_nx)],
-            [args.domain.ymin + j * args.domain.dy for j in range(args.mesh_ny)]
-        ])
-        
-        # Use existing mk_2d_graph function
-        mesh_graph = create_mesh.mk_2d_graph(
-            xy=xy,
-            nx=args.mesh_nx,
-            ny=args.mesh_ny
-        )
-        
-        # Convert to PyG format with proper features
-        pyg_graph = create_mesh.from_networkx(mesh_graph)
-        
-        # Add any additional features needed
-        if hasattr(args, 'mesh_features'):
-            for name, feature in args.mesh_features.items():
-                setattr(pyg_graph, name, feature)
-        
-        return pyg_graph
 
     def predict_step(
         self, 
