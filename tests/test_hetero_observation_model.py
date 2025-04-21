@@ -30,11 +30,16 @@ class TestHeteroObservationModel:
             def __init__(self):
                 self.hidden_dim = 32
                 self.hidden_layers = 2
-                self.data_config = {
+                self.data_config = Config({
                     'input_dim': 2,  # 2D coordinates
                     'output_dim': 1,  # Single output value
-                    'static_dim': 0   # No static features
-                }
+                    'static_dim': 0,   # No static features
+                    'dataset': {
+                        'name': 'test_dataset',
+                        'num_forcing_features': 0,
+                        'var_names': ['temperature']
+                    }
+                })
                 self.graph = {
                     'mesh_structure': {
                         'nodes': 10,  # 10 mesh nodes
@@ -64,6 +69,10 @@ class TestHeteroObservationModel:
                 self.n_example_pred = 1
                 self.processor_layers = 3
                 self.mesh_aggr = 'mean'
+                self.loss = 'mse'
+                self.lr = 0.001
+                self.val_steps_to_log = [1, 2, 3]
+                self.param_weights = torch.ones(1)
         return Args()
     
     @pytest.fixture
@@ -108,7 +117,8 @@ class TestHeteroObservationModel:
 
     def test_model_initialization(self, model_args):
         """Test model initialization"""
-        with patch('neural_lam.models.base_graph_model.utils.load_graph') as mock_load_graph:
+        with patch('neural_lam.models.base_graph_model.utils.load_graph') as mock_load_graph, \
+             patch('neural_lam.models.ar_model.utils.load_static_data') as mock_load_static:
             mock_load_graph.return_value = (False, {
                 'mesh_static_features': torch.randn(10, 2),  # 10 nodes, 2 features each
                 'm2m_features': torch.randn(15, 2),  # 15 edges, 2 features each
@@ -118,6 +128,12 @@ class TestHeteroObservationModel:
                 'm2g_features': torch.randn(20, 2),  # 20 mesh-to-grid edges
                 'm2g_edge_index': torch.randint(0, 10, (2, 20))
             })
+            
+            mock_load_static.return_value = {
+                'grid_static_features': torch.randn(10, 2),  # Static features for each grid point
+                'border_mask': torch.zeros(10, 1),  # Border mask
+                'step_diff_std': torch.ones(1),  # Standard deviation for step differences
+            }
             
             model = HeteroObservationGraphModel(model_args)
         
