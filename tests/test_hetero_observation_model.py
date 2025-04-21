@@ -5,11 +5,24 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 from neural_lam.models.hetero_observation_model import HeteroObservationGraphModel
-import pytest
-import torch
+from neural_lam.config import Config
 from unittest.mock import patch
 
 class TestHeteroObservationModel:
+    @pytest.fixture
+    def setup_lambert_projection(self):
+        config = Config({
+            'projection': {
+                'class': 'LambertConformal',
+                'kwargs': {
+                    'central_longitude': -97.0,
+                    'central_latitude': 38.0,
+                    'standard_parallels': (38.0, 38.0)
+                }
+            }
+        })
+        return config
+
     @pytest.fixture
     def model_args(self):
         """Basic model arguments"""
@@ -28,7 +41,16 @@ class TestHeteroObservationModel:
                         'edges': 15,   # 15 mesh edges
                         'features': 2   # 2D positions
                     },
-                    'hierarchical': False
+                    'config': Config({
+                        'projection': {
+                            'class': 'LambertConformal',
+                            'kwargs': {
+                                'central_longitude': -97.0,
+                                'central_latitude': 38.0,
+                                'standard_parallels': (38.0, 38.0)
+                            }
+                        }
+                    })
                 }
                 self.observation_types = {
                     'temperature': {'dim': 1},
