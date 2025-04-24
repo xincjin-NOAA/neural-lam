@@ -10,8 +10,7 @@ from typing import Dict, List, Tuple, Optional
 from functools import lru_cache
 
 from .create_mesh_graph import mk_2d_graph, create_grid_to_mesh, create_mesh_to_grid, plot_graph
-from .timing_utils import organize_bins_times
-from .process_timeseries import extract_features
+from .process_timeseries import extract_features, organize_bins_times
 
 class GraphDataset(Dataset):
     def __init__(
@@ -76,69 +75,12 @@ class GraphDataset(Dataset):
         )
         self.data_summary = extract_features(self.z, self.data_summary)
 
-         self.mesh_structure = self.create_mesh_structure(
+        self.mesh_structure = self.create_mesh_structure(
             xy=grid_coordinates,
             args=args,
             graph_dir_path=save_path
         )
 
-
-    def _get_cache_paths(self) -> Dict[str, str]:
-        """Get paths for cached mesh structures"""
-        import os
-        
-        # Create cache directory if it doesn't exist
-        cache_dir = os.path.join(self.save_path, "mesh_cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        # Create cache key based on parameters that affect mesh structure
-        cache_key = f"mesh_{self.mesh_resolution}_{self.cutoff_factor}_{self.num_neighbors}"
-        
-        return {
-            "mesh": os.path.join(cache_dir, f"{cache_key}_mesh.pt"),
-            "mesh_points": os.path.join(cache_dir, f"{cache_key}_points.npy"),
-            "g2m": os.path.join(cache_dir, f"{cache_key}_g2m.pt"),
-            "m2g": os.path.join(cache_dir, f"{cache_key}_m2g.pt"),
-            "edge_features": os.path.join(cache_dir, f"{cache_key}_edge_features.pt")
-        }
-    
-    def _load_cached_structures(self) -> bool:
-        """Try to load cached mesh structures"""
-        try:
-            cache_paths = self._get_cache_paths()
-            
-            # Check if all cache files exist
-            if not all(os.path.exists(path) for path in cache_paths.values()):
-                return False
-            
-            # Load cached structures
-            self.mesh_structure = torch.load(cache_paths["mesh"])
-            self.mesh_points = np.load(cache_paths["mesh_points"])
-            self.g2m_graph = torch.load(cache_paths["g2m"])
-            self.m2g_graph = torch.load(cache_paths["m2g"])
-            self.edge_features = torch.load(cache_paths["edge_features"])
-            
-            return True
-            
-        except Exception as e:
-            print(f"Warning: Failed to load cached structures: {e}")
-            return False
-    
-    def _save_structures_to_cache(self):
-        """Save current mesh structures to cache"""
-        try:
-            cache_paths = self._get_cache_paths()
-            
-            # Save structures
-            torch.save(self.mesh_structure, cache_paths["mesh"])
-            np.save(cache_paths["mesh_points"], self.mesh_points)
-            torch.save(self.g2m_graph, cache_paths["g2m"])
-            torch.save(self.m2g_graph, cache_paths["m2g"])
-            torch.save(self.edge_features, cache_paths["edge_features"])
-            
-        except Exception as e:
-            print(f"Warning: Failed to save structures to cache: {e}")
-    
     @lru_cache(maxsize=None)
     def _create_mesh_structure_cached(self, mesh_resolution: float, cutoff_factor: float, num_neighbors: int):
         """Create the static mesh structure for the domain with caching"""
