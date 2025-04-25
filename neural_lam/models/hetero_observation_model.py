@@ -7,14 +7,13 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
 from torch_geometric.data import Data, Dataset, Batch
-from torch_geometric.loader import DataLoader
 
-from .base_graph_model import BaseGraphModel
+from .ar_model import ARModel
 from .. import utils
 from ..interaction_net import InteractionNet
 
 
-class HeteroObservationGraphModel(BaseGraphModel):
+class HeteroObservationGraphModel(ARModel):
     """
     Graph neural network model for processing heterogeneous observations.
     Handles observations of different types (temperature, wind, pressure, etc.)
@@ -33,13 +32,13 @@ class HeteroObservationGraphModel(BaseGraphModel):
         # Dictionary to store observation type configurations
         self.observation_types = {}
         
-        # Process features on mesh using GNN
-        self.mesh_gnn = InteractionNet(
-            edge_index=None,  # Will be set from dataset
-            input_dim=args.hidden_dim,
-            hidden_layers=args.hidden_layers,
-            update_edges=True
-        )
+        # # Process features on mesh using GNN
+        # self.mesh_gnn = InteractionNet(
+        #     edge_index=self.m2m_edge_index,  # Will be set from dataset
+        #     input_dim=args.hidden_dim,
+        #     hidden_layers=args.hidden_layers,
+        #     update_edges=True
+        # )
         
         # Networks for each observation type
         self.observation_embedders = nn.ModuleDict()
@@ -68,8 +67,8 @@ class HeteroObservationGraphModel(BaseGraphModel):
         
         # Store graph structures from dataset
         self.mesh_structure = None  # Will be set from dataset
-        self.m2g_graph = None       # Will be set from dataset
-        self.g2m_graph = None       # Will be set from dataset
+        self.m2o_graph = None       # Will be set from dataset
+        self.o2m_graph = None       # Will be set from dataset
 
     def setup_observation_networks(self, observation_config: Dict):
         """
@@ -106,6 +105,14 @@ class HeteroObservationGraphModel(BaseGraphModel):
                 update_edges=False
             )
 
+    def get_num_mesh(self):
+        """
+        Compute number of mesh nodes from loaded features,
+        and number of mesh nodes that should be ignored in encoding/decoding
+        """
+        # TODO
+        return 100, 0  #  self.mesh_static_features.shape[0], 0
+        
     def build_observation_graphs(self, observation_locations: Dict[str, torch.Tensor]):
         """
         Build edges between observation locations and mesh nodes.
@@ -162,8 +169,8 @@ class HeteroObservationGraphModel(BaseGraphModel):
         self.mesh_structure = dataset.mesh_structure
         
         # Set mesh-to-grid and grid-to-mesh graphs
-        self.m2g_graph = dataset.m2g_graph
-        self.g2m_graph = dataset.g2m_data['g2m_graph']
+        self.m2o_graph = dataset.m2o_graph
+        self.o2m_graph = dataset.o2m_data['o2m_graph']
         
         # Update GNN with correct edge indices
         self.mesh_gnn.edge_index = self.mesh_structure.edge_index

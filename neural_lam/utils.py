@@ -46,7 +46,7 @@ def load_static_data(dataset_name, device="cpu"):
         )
 
     # Load border mask, 1. if node is part of border, else 0.
-    border_mask_np = np.load(os.path.join(static_dir_path, "border_mask.npy"))
+    border_mask_np = np.load(os.path.join(static_dir_path, "15km_border_mask.npy"))
     border_mask = (
         torch.tensor(border_mask_np, dtype=torch.float32, device=device)
         .flatten(0, 1)
