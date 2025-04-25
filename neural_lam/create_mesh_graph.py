@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 # Third-party
 import matplotlib
 import matplotlib.pyplot as plt
-import networkx
+import networkx as netwx
 import numpy as np
 import scipy.spatial
 import torch
@@ -71,7 +71,7 @@ def sort_nodes_internally(nx_graph):
     # For some reason the networkx .nodes() return list can not be sorted,
     # but this is the ordering used by pyg when converting.
     # This function fixes this.
-    H = networkx.DiGraph()
+    H = netwx.DiGraph()
     H.add_nodes_from(sorted(nx_graph.nodes(data=True)))
     H.add_edges_from(nx_graph.edges(data=True))
     return H
@@ -161,7 +161,7 @@ def mk_2d_graph(xy, nx, ny):
     ly = np.linspace(ym + dy / 2, yM - dy / 2, ny)
 
     mg = np.meshgrid(lx, ly)
-    g = networkx.grid_2d_graph(len(ly), len(lx))
+    g = netwx.grid_2d_graph(len(ly), len(lx))
 
     for node in g.nodes:
         g.nodes[node]["pos"] = np.array([mg[0][node], mg[1][node]])
@@ -177,7 +177,7 @@ def mk_2d_graph(xy, nx, ny):
     )
 
     # turn into directed graph
-    dg = networkx.DiGraph(g)
+    dg = netwx.DiGraph(g)
     for u, v in g.edges():
         d = np.sqrt(np.sum((g.nodes[u]["pos"] - g.nodes[v]["pos"]) ** 2))
         dg.edges[u, v]["len"] = d
@@ -189,13 +189,25 @@ def mk_2d_graph(xy, nx, ny):
     return dg
 
 
+# def prepend_node_index(graph, new_index):
+#     # Relabel node indices in graph, insert (graph_level, i, j)
+#     ijk = [tuple((new_index,) + tuple(graph.nodes[n]['pos'])) for n in graph.nodes]
+#     to_mapping = dict(zip(graph.nodes, ijk))
+#     return netwx.relabel_nodes(graph, to_mapping, copy=True)
+
 def prepend_node_index(graph, new_index):
     # Relabel node indices in graph, insert (graph_level, i, j)
     ijk = [tuple((new_index,) + x) for x in graph.nodes]
     to_mapping = dict(zip(graph.nodes, ijk))
-    return networkx.relabel_nodes(graph, to_mapping, copy=True)
+    return netwx.relabel_nodes(graph, to_mapping, copy=True)
 
-def create_mesh_structure(self, xy, args, graph_dir_path):
+def prepend_node_index_int(graph, new_index):
+    # Relabel node indices in graph, insert (graph_level, i, j)
+    ijk = [tuple((new_index,) + (x,)) for x in graph.nodes]
+    to_mapping = dict(zip(graph.nodes, ijk))
+    return netwx.relabel_nodes(graph, to_mapping, copy=True)
+
+def create_mesh_structure(xy, args, graph_dir_path):
     """
     Create multi-resolution mesh structure with optional hierarchical organization.
     
@@ -210,7 +222,7 @@ def create_mesh_structure(self, xy, args, graph_dir_path):
     Returns:
         dict: Contains mesh graphs, positions, and related data
     """
-    import networkx as nx
+    import networkx as netwx
     import numpy as np
     import torch
     from scipy import spatial
@@ -231,21 +243,21 @@ def create_mesh_structure(self, xy, args, graph_dir_path):
     G = []
     for lev in range(1, mesh_levels + 1):
         n = int(nleaf / (nx**lev))
-        g = self.mk_2d_graph(xy, n, n)
+        g = mk_2d_graph(xy, n, n)
         if args.plot:
-            self.plot_graph(from_networkx(g), title=f"Mesh graph, level {lev}")
+            plot_graph(from_networkx(g), title=f"Mesh graph, level {lev}")
             plt.show()
         G.append(g)
     
     if args.hierarchical:
-        return self._create_hierarchical_mesh(G, mesh_levels, graph_dir_path, args)
+        return _create_hierarchical_mesh(G, mesh_levels, graph_dir_path, args)
     else:
-        return self._create_flat_mesh(G, nx, graph_dir_path, args)
+        return _create_flat_mesh(G, nx, graph_dir_path, args)
 
-def _create_hierarchical_mesh(self, G, mesh_levels, graph_dir_path, args):
+def _create_hierarchical_mesh(G, mesh_levels, graph_dir_path, args):
     """Create hierarchical mesh structure with inter-level connections."""
     # Relabel nodes with level index
-    G = [self.prepend_node_index(graph, level_i) 
+    G = [prepend_node_index(graph, level_i) 
          for level_i, graph in enumerate(G)]
     
     # Calculate level indices
@@ -255,18 +267,18 @@ def _create_hierarchical_mesh(self, G, mesh_levels, graph_dir_path, args):
     )
     
     # Create inter-level connections
-    up_graphs, down_graphs = self._create_interlevel_connections(
+    up_graphs, down_graphs = _create_interlevel_connections(
         G, mesh_levels, first_index_level, args
     )
     
     # Save up and down edges
-    self.save_edges_list(up_graphs, "mesh_up", graph_dir_path)
-    self.save_edges_list(down_graphs, "mesh_down", graph_dir_path)
+    save_edges_list(up_graphs, "mesh_up", graph_dir_path)
+    save_edges_list(down_graphs, "mesh_down", graph_dir_path)
     
     # Create m2m graphs
     m2m_graphs = [
-        self.from_networkx_with_start_index(
-            nx.convert_node_labels_to_integers(
+        from_networkx_with_start_index(
+            netwx.convert_node_labels_to_integers(
                 level_graph, first_label=start_index, ordering="sorted"
             ),
             start_index,
@@ -278,8 +290,8 @@ def _create_hierarchical_mesh(self, G, mesh_levels, graph_dir_path, args):
     
     # Create combined mesh structure
     G_bottom_mesh = G[0]
-    joint_mesh_graph = nx.union_all([graph for graph in G])
     
+    joint_mesh_graph = netwx.union_all([graph for graph in G])
     return {
         'm2m_graphs': m2m_graphs,
         'mesh_pos': mesh_pos,
@@ -287,7 +299,7 @@ def _create_hierarchical_mesh(self, G, mesh_levels, graph_dir_path, args):
         'all_mesh_nodes': joint_mesh_graph.nodes(data=True)
     }
 
-def _create_flat_mesh(self, G, nx, graph_dir_path, args):
+def _create_flat_mesh(G, nx, graph_dir_path, args):
     """Create flat mesh structure combining all levels."""
     G_tot = G[0]
     
@@ -301,12 +313,12 @@ def _create_flat_mesh(self, G, nx, graph_dir_path, args):
             .reshape(int(n / nx) ** 2, 2)
         )
         ij = [tuple(x) for x in ij]
-        G[lev] = nx.relabel_nodes(G[lev], dict(zip(G[lev].nodes, ij)))
-        G_tot = nx.compose(G_tot, G[lev])
+        G[lev] = netwx.relabel_nodes(G[lev], dict(zip(G[lev].nodes, ij)))
+        G_tot = netwx.compose(G_tot, G[lev])
     
     # Relabel and convert to integers
-    G_tot = self.prepend_node_index(G_tot, 0)
-    G_int = nx.convert_node_labels_to_integers(
+    G_tot = prepend_node_index(G_tot, 0)
+    G_int = netwx.convert_node_labels_to_integers(
         G_tot, first_label=0, ordering="sorted"
     )
     
@@ -316,17 +328,59 @@ def _create_flat_mesh(self, G, nx, graph_dir_path, args):
     mesh_pos = [pyg_m2m.pos.to(torch.float32)]
     
     if args.plot:
-        self.plot_graph(pyg_m2m, title="Mesh-to-mesh")
+        plot_graph(pyg_m2m, title="Mesh-to-mesh")
         plt.show()
-    
+        
     return {
         'm2m_graphs': m2m_graphs,
         'mesh_pos': mesh_pos,
-        'G_bottom_mesh': G_tot,
-        'all_mesh_nodes': G_tot.nodes(data=True)
+        'G_bottom_mesh': G_int,
+        'all_mesh_nodes': G_int.nodes(data=True)
     }
 
-def _create_interlevel_connections(self, G, mesh_levels, first_index_level, args):
+def _create_level_connections(G_from, G_to, start_index):
+    # start out from graph at from level
+    G_down = G_from.copy()
+    G_down.clear_edges()
+    G_down = netwx.DiGraph(G_down)
+
+    # Add nodes of to level
+    G_down.add_nodes_from(G_to.nodes(data=True))
+
+    # build kd tree for mesh point pos
+    # order in vm should be same as in vm_xy
+    v_to_list = list(G_to.nodes)
+    v_from_list = list(G_from.nodes)
+    v_from_xy = np.array([xy for _, xy in G_from.nodes.data("pos")])
+    kdt_m = scipy.spatial.KDTree(v_from_xy)
+
+    # add edges from mesh to grid
+    for v in v_to_list:
+        # find 1(?) nearest neighbours (index to vm_xy)
+        neigh_idx = kdt_m.query(G_down.nodes[v]["pos"], 1)[1]
+        u = v_from_list[neigh_idx]
+
+        # add edge from mesh to grid
+        G_down.add_edge(u, v)
+        d = np.sqrt(
+            np.sum(
+                (G_down.nodes[u]["pos"] - G_down.nodes[v]["pos"]) ** 2
+            )
+        )
+        G_down.edges[u, v]["len"] = d
+        G_down.edges[u, v]["vdiff"] = (
+            G_down.nodes[u]["pos"] - G_down.nodes[v]["pos"]
+        )
+
+    # relabel nodes to integers (sorted)
+    G_down_int = netwx.convert_node_labels_to_integers(
+        G_down, first_label=start_index, ordering="sorted"
+    )  # Issue with sorting here
+    G_down_int = sort_nodes_internally(G_down_int)
+    pyg_down = from_networkx_with_start_index(G_down_int, start_index)
+    return pyg_down
+
+def _create_interlevel_connections(G, mesh_levels, first_index_level, args):
     """Create connections between different mesh levels."""
     up_graphs = []
     down_graphs = []
@@ -339,7 +393,7 @@ def _create_interlevel_connections(self, G, mesh_levels, first_index_level, args
         first_index_level[: mesh_levels - 1],
     ):
         # Create downward connections
-        G_down = self._create_level_connections(
+        G_down = _create_level_connections(
             G_from, G_to, start_index
         )
         
@@ -354,12 +408,18 @@ def _create_interlevel_connections(self, G, mesh_levels, first_index_level, args
         down_graphs.append(G_down)
         
         if args.plot:
-            self.plot_graphs(G_down, pyg_up, from_level, to_level)
+            plot_graphs(G_down, pyg_up, from_level, to_level)
     
     return up_graphs, down_graphs
         
-
-def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
+def print_pos(vm):
+    """Calculate distance between mesh nodes."""
+    #print(vm.data('pos'))
+    pos_data = dict(vm.data("pos"))
+    print("Available keys in pos_data:", list(pos_data.keys()))
+    return
+    
+def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'):
     """
     Create Grid-to-Mesh (g2m) graph structure for heterogeneous observations.
     
@@ -384,7 +444,7 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
             - edge_weights: Optional weights for heterogeneous observations
             - boundary_mask: Optional tensor marking boundary (0) and interior (1) nodes
     """
-    import networkx as nx
+    import networkx as netwx
     import numpy as np
     from scipy.spatial import KDTree
     
@@ -397,6 +457,9 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
     
     def _calculate_mesh_distance(vm):
         """Calculate distance between mesh nodes."""
+        #print(vm.data('pos'))
+        # pos_data = dict(vm.data("pos"))
+        # print("Available keys in pos_data:", list(pos_data.keys()))
         pos1 = vm.data("pos")[(0, 1, 0)]
         pos2 = vm.data("pos")[(0, 0, 0)]
         return _euclidean_distance(pos1, pos2)
@@ -410,17 +473,17 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
     
     def _create_base_grid(points):
         """Create base grid graph from coordinates."""
-        G_grid = nx.Graph()
+        G_grid = netwx.Graph()
         
         # Add nodes with positions
         for i, pos in enumerate(points):
             G_grid.add_node(i, pos=pos)
-        
-        return self.prepend_node_index(G_grid, 1000)
+        return prepend_node_index_int(G_grid, 1000)
     
-    def _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args):
+    def _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args0):
         """Create edges from grid to mesh nodes with observation-specific parameters."""
         # Get observation-specific parameters
+        args = vars(args0)
         obs_type = args.get('obs_type', None)
         cutoff = args.get('cutoff', DM_SCALE)
         num_neighbors = args.get('num_neighbors', 3)
@@ -460,6 +523,7 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
         return G_g2m
     
     try:
+        args_dict = vars(args)
         # 1. Get mesh nodes and their positions
         vm = G_bottom_mesh.nodes
         vm_xy = np.array([pos for _, pos in vm.data("pos")])
@@ -478,19 +542,19 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
         G_grid.add_nodes_from(all_mesh_nodes)
         
         # 5. Create g2m graph with sorted nodes
-        G_g2m = nx.Graph()
+        G_g2m = netwx.Graph()
         G_g2m.add_nodes_from(sorted(G_grid.nodes(data=True)))
-        G_g2m = nx.DiGraph(G_g2m)
-        
+        G_g2m = netwx.DiGraph(G_g2m)
+
         # 6. Add edges
-        G_g2m = _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm)
-        
+        G_g2m = _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args)
+
         # 7. Convert to PyTorch Geometric
         pyg_g2m = from_networkx(G_g2m)
         
         # 8. Optional plotting
         if args.plot:
-            self.plot_graph(pyg_g2m, title="Grid-to-mesh")
+            plot_graph(pyg_g2m, title="Grid-to-mesh")
             plt.show()
         
         # Create result dictionary
@@ -501,7 +565,7 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
         }
         
         # Add boundary mask if requested
-        if args.get('include_boundary_mask', False):
+        if args_dict.get('include_boundary_mask', False):
             boundary_mask = create_boundary_mask(G_bottom_mesh, coords)
             result['boundary_mask'] = boundary_mask
             # Add mask to PyG graph as well
@@ -512,192 +576,18 @@ def create_grid_to_mesh(self, coords, G_bottom_mesh, all_mesh_nodes, args):
     except Exception as e:
         raise RuntimeError(f"Failed to create grid-to-mesh graph: {e}")
 
-def create_mesh_to_grid(self, coords, vm, args, graph_dir_path):
-    """
-    Create Mesh-to-Grid (m2g) graph structure for heterogeneous observations.
-    
-    Args:
-        coords: Array of shape [N, 2] containing [x, y] coordinates
-               or dictionary with {'x': x_array, 'y': y_array}
-               or dictionary with observation types as keys and coordinates as values
-        vm: Dictionary of mesh nodes with positions
-        args: Arguments containing:
-            - cutoff: Radius scale for mesh-grid association (default: 0.67)
-            - num_neighbors: Number of neighbors for KNN (default: 4)
-            - plot: Whether to plot the graph
-            - obs_type: Optional, observation type for type-specific parameters
-            - adaptive_neighbors: Optional, whether to use adaptive neighbor count
-            - include_boundary_mask: Optional, whether to include boundary mask (default: False)
-    
-    Returns:
-        dict: Contains:
-            - m2g_graph: PyTorch Geometric graph for mesh-to-grid
-            - edge_features: Edge features including length and vector differences
-            - edge_weights: Optional weights for heterogeneous observations
-            - boundary_mask: Optional tensor marking boundary (0) and interior (1) nodes
-    """
-    import networkx as nx
-    import numpy as np
-    from scipy.spatial import KDTree
-    
-    def _euclidean_distance(p1, p2):
-        """Calculate Euclidean distance."""
-        return np.sqrt(np.sum((p1 - p2) ** 2))
-    
-    def _get_coordinates(coords):
-        """Get coordinates from input format."""
-        if isinstance(coords, dict):
-            x, y = coords['x'].flatten(), coords['y'].flatten()
-            return np.column_stack((x, y))
-        return coords
-    
-    def _create_base_grid(points):
-        """Create base grid graph from coordinates."""
-        G = nx.Graph()
-        for i, pos in enumerate(points):
-            G.add_node(i, pos=pos)
-        return G
-    
-    def _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points, args):
-        """Create edges from mesh to grid nodes with observation-specific parameters."""
-        kdt_m = KDTree(vm_positions)
-        obs_type = args.get('obs_type', None)
-        cutoff = args.get('cutoff', 0.67)
-        base_num_neighbors = args.get('num_neighbors', 4)
-        adaptive_neighbors = args.get('adaptive_neighbors', False)
-        
-        for i, v_pos in enumerate(grid_points):
-            if adaptive_neighbors:
-                # Use radius search first
-                radius = np.mean([_euclidean_distance(v_pos, p) for p in vm_positions]) * cutoff
-                neigh_idxs = kdt_m.query_ball_point(v_pos, radius)
-                
-                # Fallback to KNN if too few or too many neighbors
-                if len(neigh_idxs) < 2 or len(neigh_idxs) > base_num_neighbors * 2:
-                    distances, neigh_idxs = kdt_m.query(v_pos, k=base_num_neighbors)
-            else:
-                # Use fixed KNN
-                distances, neigh_idxs = kdt_m.query(v_pos, k=base_num_neighbors)
-                if not isinstance(neigh_idxs, list):
-                    neigh_idxs = neigh_idxs.tolist()
-            
-            for idx in neigh_idxs:
-                u = vm_list[idx]
-                v = i  # Grid node index
-                # Add edge from mesh to grid
-                G_m2g.add_edge(u, v)
-                
-                # Calculate edge properties
-                u_pos = vm_positions[idx]
-                d = _euclidean_distance(u_pos, v_pos)
-                G_m2g.edges[u, v]["len"] = d
-                G_m2g.edges[u, v]["vdiff"] = v_pos - u_pos
-                
-                # Add observation-specific weights
-                if obs_type:
-                    # Calculate type-specific weight
-                    if obs_type == 'temperature':
-                        # Temperature: exponential decay with distance
-                        weight = np.exp(-d / (np.mean([_euclidean_distance(v_pos, p) for p in vm_positions]) * cutoff))
-                    elif obs_type == 'wind':
-                        # Wind: inverse distance with direction consideration
-                        direction = G_m2g.edges[u, v]["vdiff"] / d
-                        weight = 1.0 / (1.0 + d) * np.abs(direction).mean()
-                    elif obs_type == 'pressure':
-                        # Pressure: gaussian weight
-                        weight = np.exp(-0.5 * (d / (np.mean([_euclidean_distance(v_pos, p) for p in vm_positions])))**2)
-                    else:
-                        weight = 1.0
-                    
-                    G_m2g.edges[u, v]["weight"] = weight
-                    
-                    # Add attention weight based on relative position
-                    attention = np.dot(G_m2g.edges[u, v]["vdiff"], v_pos) / (d * np.linalg.norm(v_pos))
-                    G_m2g.edges[u, v]["attention"] = (attention + 1) / 2  # Normalize to [0,1]
-        
-        return G_m2g
-    
-    try:
-        # 1. Get grid points
-        grid_points = _get_coordinates(coords)
-        
-        # 2. Create base grid graph
-        G_m2g = _create_base_grid(grid_points)
-        
-        # 3. Get mesh nodes positions
-        vm_list = list(vm.keys())
-        vm_positions = np.array([vm[v]["pos"] for v in vm_list])
-        
-        # 4. Add mesh nodes to graph
-        for i, v in enumerate(vm_list):
-            G_m2g.add_node(v, pos=vm_positions[i])
-        
-        # 5. Create edges from mesh to grid
-        G_m2g = _create_m2g_edges(G_m2g, vm_list, vm_positions, grid_points, args)
-        
-        # 6. Convert to integers with sorted labels
-        G_m2g_int = nx.convert_node_labels_to_integers(
-            G_m2g, first_label=0, ordering="sorted"
-        )
-        
-        # 7. Convert to PyTorch Geometric
-        pyg_m2g = from_networkx(G_m2g_int)
-        
-        # 8. Save edge features
-        edge_features = {
-            'length': torch.tensor([d['len'] for _, _, d in G_m2g.edges(data=True)]),
-            'vector_diff': torch.tensor([d['vdiff'] for _, _, d in G_m2g.edges(data=True)])
-        }
-        
-        # Create result dictionary
-        result = {
-        # Add observation-specific features if present
-        if args.get('obs_type'):
-            edge_features.update({
-                'weights': torch.tensor([d.get('weight', 1.0) for _, _, d in G_m2g.edges(data=True)]),
-                'attention': torch.tensor([d.get('attention', 1.0) for _, _, d in G_m2g.edges(data=True)])
-            })
-        
-        result = {
-            'm2g_graph': pyg_m2g,
-            'edge_features': edge_features
-        }
-        
-        # Add boundary mask if requested
-        if args.get('include_boundary_mask', False):
-            # Create a graph for boundary detection
-            G_mesh = nx.Graph()
-            G_mesh.add_nodes_from([(i, {'pos': pos}) for i, pos in vm.items()])
-            
-            # Create boundary mask
-            boundary_mask = create_boundary_mask(G_mesh, coords)
-            result['boundary_mask'] = boundary_mask
-            # Add mask to PyG graph as well
-            pyg_m2g.boundary_mask = boundary_mask
-        
-        # Optional plotting
-        if args.plot:
-            self.plot_graph(pyg_m2g, title="Mesh-to-grid", 
-                           show_boundary=args.get('include_boundary_mask', False))
-            plt.show()
-        
-        return result
-        
-    except Exception as e:
-        raise RuntimeError(f"Failed to create mesh-to-grid graph: {e}")
-
 # Example usage in another function
-def some_function(self, coords, proj_params=None):
+def some_function( coords, proj_params=None):
     if proj_params is not None:
         # Setup projection if needed
-        proj = self.setup_lambert_projection(proj_params)
+        proj = setup_lambert_projection(proj_params)
         # Project coordinates
-        projected_coords = self.project_coordinates(coords, proj)
+        projected_coords = project_coordinates(coords, proj)
     else:
         # Use coordinates as is
         projected_coords = coords
 
-def setup_lambert_projection(self, params=None):
+def setup_lambert_projection( params=None):
     """
     Setup Lambert Conformal projection with default or custom parameters.
     
@@ -734,7 +624,7 @@ def setup_lambert_projection(self, params=None):
         R=default_params['earth_radius']
     )
 
-def project_coordinates(self, coords, proj):
+def project_coordinates(coords, proj):
     """
     Project latitude/longitude coordinates to Lambert projection space.
     
@@ -754,6 +644,6 @@ def project_coordinates(self, coords, proj):
     x, y = proj(lons, lats)
     return np.column_stack((x, y))
 
-
+    
 if __name__ == "__main__":
     main()
