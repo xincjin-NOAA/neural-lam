@@ -1,0 +1,337 @@
+@startuml BaseGraphModel Architecture
+title BaseGraphModel: Encode-Process-Decode Framework
+
+skinparam componentStyle rectangle
+
+package "Input" {
+    [Previous State (X_t)] as prev_state
+    [Previous Previous State (X_{t-1})] as prev_prev_state
+    [Forcing] as forcing
+    [Static Features] as static
+}
+
+package "Encoding" {
+    [Feature Concatenation] as concat
+    [Grid Embedder] as grid_emb
+    [G2M Edge Embedder] as g2m_emb
+    [M2G Edge Embedder] as m2g_emb
+    [Mesh Node Embedder] as mesh_emb
+    [Grid-to-Mesh GNN] as g2m_gnn
+}
+
+package "Processing" {
+    [Process Step] as process
+}
+
+package "Decoding" {
+    [Mesh-to-Grid GNN] as m2g_gnn
+    [Output MLP] as output_mlp
+}
+
+package "Output" {
+    [Delta Mean] as delta
+    [Standard Deviation] as std
+    [Final Prediction (X_{t+1})] as final
+}
+
+' Input connections
+prev_state --> concat
+prev_prev_state --> concat
+forcing --> concat
+static --> concat
+
+' Encoding flow
+concat --> grid_emb
+grid_emb --> g2m_gnn
+g2m_emb --> g2m_gnn
+mesh_emb --> g2m_gnn
+
+' Processing flow
+g2m_gnn --> process
+
+' Decoding flow
+process --> m2g_gnn
+m2g_emb --> m2g_gnn
+m2g_gnn --> output_mlp
+output_mlp --> delta
+output_mlp --> std
+
+' Final output
+delta --> final
+prev_state --> final
+
+note right of process
+  Implementation specific
+  to child classes
+end note
+
+note right of output_mlp
+  Optional split for
+  mean and std
+end note
+
+@enduml
+
+@startuml BaseGraphModel Class Structure
+title BaseGraphModel Class and Methods
+
+class BaseGraphModel {
+    -- Initialization --
+    + __init__(args)
+
+    -- Abstract Methods --
+    + get_num_mesh()
+    + embedd_mesh_nodes()
+    + process_step(mesh_rep)
+
+    -- Core Prediction --
+    + predict_step(prev_state, prev_prev_state, forcing)
+
+    -- Fields --
+    + hierarchical
+    + num_mesh_nodes
+    + g2m_edges
+    + m2g_edges
+    + mlp_blueprint_end
+
+    -- Neural Network Components --
+    + grid_embedder
+    + g2m_embedder
+    + m2g_embedder
+    + g2m_gnn
+    + encoding_grid_mlp
+    + m2g_gnn
+    + output_map
+}
+
+note right of BaseGraphModel::get_num_mesh
+  Returns number of mesh nodes and
+  nodes to ignore in encoding/decoding
+end note
+
+note right of BaseGraphModel::embedd_mesh_nodes
+  Returns tensor of shape
+  (num_mesh_nodes, d_h)
+end note
+
+note right of BaseGraphModel::process_step
+  Processes mesh representation
+  Returns: (B, num_mesh_nodes, d_h)
+end note
+
+note right of BaseGraphModel::predict_step
+  Main prediction function
+  X_{t-1}, X_t -> X_{t+1}
+end note
+
+@enduml
+
+@startuml BaseGraphModel Complete Flow
+title BaseGraphModel: Complete Method Flow
+
+' Model Initialization
+package "Initialization (__init__)" {
+    [Load Graph] as load
+    [Register Buffers] as reg
+    [Get Mesh Numbers] as get_mesh #LightYellow
+    [Initialize Neural Components] as init_nn
+}
+
+' Abstract Methods
+package "Abstract Methods" {
+    [get_num_mesh()] as get_num_mesh #LightYellow
+    [embedd_mesh_nodes()] as embed_mesh #LightYellow
+    [process_step(mesh_rep)] as process #LightYellow
+}
+
+' Predict Step Flow
+package "predict_step" {
+    package "Input" {
+        [Previous State (X_t)] as prev_state
+        [Previous Previous State (X_{t-1})] as prev_prev_state
+        [Forcing] as forcing
+        [Static Features] as static
+    }
+
+    package "Feature Processing" {
+        [Concatenate Features] as concat
+        [Embed Grid] as grid_emb
+        [Embed G2M Edges] as g2m_emb
+        [Embed M2G Edges] as m2g_emb
+    }
+
+    package "Graph Operations" {
+        [Grid-to-Mesh GNN] as g2m_gnn
+        [Process on Mesh] as process_mesh #LightYellow
+        [Mesh-to-Grid GNN] as m2g_gnn
+    }
+
+    package "Output Generation" {
+        [Output MLP] as output_mlp
+        [Split Output] as split
+        [Final Prediction] as final
+    }
+}
+
+' Initialization Flow
+load --> reg
+reg --> get_mesh
+get_mesh --> init_nn
+
+' Abstract Method Usage
+get_mesh ..> get_num_mesh : calls
+grid_emb ..> embed_mesh : calls
+process_mesh ..> process : calls
+
+' Predict Step Flow
+prev_state --> concat
+prev_prev_state --> concat
+forcing --> concat
+static --> concat
+
+concat --> grid_emb
+grid_emb --> g2m_gnn
+g2m_emb --> g2m_gnn
+m2g_emb --> g2m_gnn
+g2m_gnn --> process_mesh
+process_mesh --> m2g_gnn
+m2g_gnn --> output_mlp
+output_mlp --> split
+split --> final
+
+legend right
+    |Color|Type|
+    |<#FFFFFF>|Concrete Implementation|
+    |<#FFFFaa>|Abstract Method|
+endlegend
+
+note "Abstract methods must be\nimplemented by child classes" as N1
+N1 .. get_num_mesh
+
+@enduml
+
+
+@startuml BaseGraphModel Complete Flow
+title BaseGraphModel: Graph and Temporal Connections
+
+' Model Structure
+package "Graph Structure" {
+    [Grid Nodes] as grid
+    [Mesh Nodes] as mesh
+    [Grid-to-Mesh Edges] as g2m
+    [Mesh-to-Grid Edges] as m2g
+}
+
+' Temporal Structure
+package "Temporal Observations" {
+    [X_{t-1}] as x_prev
+    [X_t] as x_current
+    [X_{t+1}] as x_next
+    [Forcing] as forcing
+}
+
+' Feature Processing
+package "Node Features" {
+    [Static Grid Features] as static_grid
+    [Static Mesh Features] as static_mesh
+    [Dynamic Grid Features] as dynamic_grid
+}
+
+' Connections
+' Temporal connections
+x_prev -> x_current : "Previous state"
+x_current -> x_next : "Current state"
+forcing -> x_next : "External forcing"
+
+' Spatial connections through graph
+grid <--> mesh : "G2M/M2G edges"
+g2m --> grid : "Grid to Mesh mapping"
+g2m --> mesh
+m2g --> mesh : "Mesh to Grid mapping"
+m2g --> grid
+
+' Feature connections
+static_grid --> grid : "Static features"
+static_mesh --> mesh : "Static features"
+dynamic_grid --> grid : "Dynamic features\n(X_t, X_{t-1}, forcing)"
+
+note right of grid
+  Grid nodes represent
+  observation points
+end note
+
+note left of mesh
+  Mesh nodes represent
+  computational mesh
+end note
+
+note bottom of forcing
+  External forcing
+  affects prediction
+end note
+
+legend right
+    |Arrow Type|Connection Type|
+    |<- ->|Bidirectional Graph Connection|
+    |-->|Feature or State Flow|
+endlegend
+
+@enduml
+
+@startuml BaseGraphModel Feature Connections
+title BaseGraphModel: Feature Connection Implementation
+
+package "Feature Loading (__init__)" {
+    [utils.load_graph] as load_graph
+    [register_buffer] as reg_buffer
+    note right: "Loads and registers\nstatic features"
+}
+
+package "Feature Processing (predict_step)" {
+    package "Input Features" {
+        [prev_state] as prev
+        [prev_prev_state] as prev_prev
+        [forcing] as force
+        [grid_static_features] as static
+    }
+
+    package "Feature Embedding" {
+        [grid_embedder] as grid_emb
+        [g2m_embedder] as g2m_emb
+        [m2g_embedder] as m2g_emb
+        [embedd_mesh_nodes] as mesh_emb
+        note right: "Abstract method for\nmesh features"
+    }
+
+    package "Graph Neural Networks" {
+        [g2m_gnn] as g2m_gnn
+        [m2g_gnn] as m2g_gnn
+    }
+}
+
+' Loading flow
+load_graph --> reg_buffer
+
+' Feature concatenation
+prev --> grid_emb : concat
+prev_prev --> grid_emb : concat
+force --> grid_emb : concat
+static --> grid_emb : concat
+
+' Embedding flow
+grid_emb --> g2m_gnn
+g2m_emb --> g2m_gnn
+mesh_emb --> g2m_gnn
+
+' GNN flow
+g2m_gnn --> m2g_gnn : mesh_rep
+m2g_emb --> m2g_gnn
+
+note bottom of m2g_gnn
+  Final grid representation
+  used for prediction
+end note
+
+@enduml
+
+

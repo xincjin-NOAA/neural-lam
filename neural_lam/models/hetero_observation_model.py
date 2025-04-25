@@ -11,7 +11,7 @@ from torch_geometric.data import Data, Dataset, Batch
 from .ar_model import ARModel
 from .. import utils
 from ..interaction_net import InteractionNet
-
+from ..create_mesh_graph import create_mesh_structures, create_obs_conn_mesh
 
 class HeteroObservationGraphModel(ARModel):
     """
@@ -47,7 +47,7 @@ class HeteroObservationGraphModel(ARModel):
         self.observation_to_mesh = nn.ModuleDict()
         self.mesh_to_observation = nn.ModuleDict()
         
-        # GraphDataset parameters
+        # GraphModel parameters
         self.mesh_resolution = args.mesh_resolution
         self.cutoff_factor = args.cutoff_factor
         self.num_neighbors = args.num_neighbors
@@ -65,10 +65,10 @@ class HeteroObservationGraphModel(ARModel):
             batch_first=True
         )
         
-        # Store graph structures from dataset
-        self.mesh_structure = None  # Will be set from dataset
-        self.m2o_graph = None       # Will be set from dataset
-        self.o2m_graph = None       # Will be set from dataset
+        # Graph structures
+        self.mesh_structure = None  # Will be set
+        self.m2o_graph = None       # Will be set
+        self.o2m_graph = None       # Will be set
 
     def setup_observation_networks(self, observation_config: Dict):
         """
@@ -157,27 +157,37 @@ class HeteroObservationGraphModel(ARModel):
         )
         
         return combined
+    def create_mesh_structures(self):
+        """
+        Create or load the static mesh structure for the domain
+        """
+        # Get mesh structures from cached function
+        mesh_data = create_mesh_structure(
+            args        )
+        
+        # Set instance attributes
+        self.mesh_structure = mesh_data["mesh_structure"]
+        self.mesh_points = mesh_data["mesh_points"]
 
-    def set_graph_structures(self, dataset):
+    def create_obs_conn_mesh(self):
         """
         Set graph structures from the provided GraphDataset.
         
         Args:
             dataset: GraphDataset instance containing mesh and grid structures
         """
-        # Store mesh structure
-        self.mesh_structure = dataset.mesh_structure
+ 
+        # Create observation to mesh and mesh-to-observation graphs
         
-        # Set mesh-to-grid and grid-to-mesh graphs
-        self.m2o_graph = dataset.m2o_graph
-        self.o2m_graph = dataset.o2m_data['o2m_graph']
-        
-        # Update GNN with correct edge indices
-        self.mesh_gnn.edge_index = self.mesh_structure.edge_index
+        self.o2m_graph = create_obs_conn_mesh()
+        self.m2o_graph = create_obs_conn_mesh()
+
+        # TODO Update GNN with correct edge indices
+        # self.mesh_gnn.edge_index = self.mesh_structure.edge_index
         
         # Store edge features if available
-        if hasattr(dataset, 'edge_features'):
-            self.edge_features = dataset.edge_features
+        # if hasattr(dataset, 'edge_features'):
+        #     self.edge_features = dataset.edge_features
 
     def predict_step(
         self, 
@@ -200,6 +210,9 @@ class HeteroObservationGraphModel(ARModel):
         """
         batch_size = next(iter(observations.values()))[1].shape[0]
         device = next(iter(observations.values()))[1].device
+        
+        self.create_obs2mesh(observations)
+        self.create_mesh2obs(observations)
         
         # Process each observation type and map to mesh
         mesh_features_list = []
