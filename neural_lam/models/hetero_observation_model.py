@@ -13,7 +13,7 @@ from torch_geometric.data import Data, Dataset, Batch
 from .ar_model import ARModel
 from .. import utils
 from ..interaction_net import InteractionNet
-from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh, create_transformer
+from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh, project_coords
 
 class HeteroObservationGraphModel(ARModel):
     """
@@ -31,29 +31,84 @@ class HeteroObservationGraphModel(ARModel):
     def __init__(self, args):
         super().__init__(args)
         self.args = args
+        self.hidden_dim = args.hidden_dim
+        self.num_heads = args.num_heads
+        
+        # Blueprint for observation MLPs
+        self.mlp_blueprint = [self.hidden_dim] * args.num_layers
         
         # Dictionary to store observation type configurations
         self.observation_types = {}
         
-        # # Process features on mesh using GNN
-        # self.mesh_gnn = InteractionNet(
-        #     edge_index=self.m2m_edge_index,  # Will be set from dataset
-        #     input_dim=args.hidden_dim,
-        #     hidden_layers=args.hidden_layers,
-        #     update_edges=True
-        # )
-        
-        # Networks for each observation type
+        # Create dictionaries to store networks
         self.observation_embedders = nn.ModuleDict()
-        
-        # Use graph_dataset utilities for observation-to-mesh mapping
         self.observation_to_mesh = nn.ModuleDict()
         self.mesh_to_observation = nn.ModuleDict()
         
-        # GraphModel parameters
-        self.mesh_resolution = args.mesh_resolution
-        self.cutoff_factor = args.cutoff_factor
-        self.num_neighbors = args.num_neighbors
+        # Create mesh processing GNN
+        self.mesh_gnn = InteractionNet(
+            edge_index=None,  # Will be set during forward pass
+            input_dim=self.hidden_dim,
+            hidden_layers=args.num_layers,
+            update_edges=False
+        )
+        
+        # Initialize mesh graph (will be set later)
+        self.mesh_graph = None
+        
+    def create_batch_mesh_edges(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """
+        Create batched mesh edges by repeating the mesh graph for each batch item.
+        
+        Args:
+            batch_size: Number of items in the batch
+            device: Device to create tensor on
+            
+        Returns:
+            Tensor of shape [2, E*B] containing batched edge indices
+        """
+        num_mesh_nodes = self.mesh_graph.pos.shape[0]
+        batch_mesh_edges = []
+        
+        for b in range(batch_size):
+            offset = b * num_mesh_nodes
+            batch_edges = self.mesh_graph.edge_index + offset
+            batch_mesh_edges.append(batch_edges)
+            
+        return torch.cat(batch_mesh_edges, dim=1)
+        
+    def initialize_mesh_features(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """
+        Initialize mesh features for the batch.
+        
+        Args:
+            batch_size: Number of items in the batch
+            device: Device to create tensor on
+            
+        Returns:
+            Tensor of shape [B, M, D] containing initialized mesh features
+        """
+        return torch.zeros(
+            batch_size,
+            self.mesh_graph.pos.shape[0],
+            self.hidden_dim,
+            device=device
+        )
+            update_edges=False
+        )
+        
+        if observation_config is not None:
+            self.setup_observation_networks(observation_config)
+        
+        # Initialize mesh graph attributes
+        self.mesh_graph = None
+        self.mesh_features = None
+        self.obs_to_mesh_edges = {}
+        self.mesh_to_obs_edges = {}
+        
+        # These will be set when processing observations
+        self.m2o_graph = None       # Will be set
+        self.o2m_graph = None       # Will be set
         
         # Feature combination layers
         self.mesh_feature_combiner = utils.make_mlp(
@@ -73,39 +128,65 @@ class HeteroObservationGraphModel(ARModel):
         self.m2o_graph = None       # Will be set
         self.o2m_graph = None       # Will be set
 
-    def setup_observation_networks(self, observation_config: Dict):
+    def setup_observation_networks(self, observation_config: Dict[str, Dict]):
         """
-        Initialize networks for each observation type.
+        Initialize networks for processing each observation type.
         
         Args:
-            observation_config: Dictionary mapping observation types to their configs
-                {
-                    'temperature': {'dim': 1, 'locations': [...], ...},
-                    'wind': {'dim': 2, 'locations': [...], ...},
-                    ...
-                }
+            observation_config: Dictionary mapping observation types to their configurations
         """
-        self.observation_types = observation_config
+        # Create encoder networks for each observation type
+        self.observation_encoders = nn.ModuleDict()
+        
+        # Create embedder networks for each observation type
+        self.observation_embedders = nn.ModuleDict()
+        
+        # Create observation-to-mesh networks
+        self.observation_to_mesh = nn.ModuleDict()
+        
+        # Create mesh-to-observation networks
+        self.mesh_to_observation = nn.ModuleDict()
+        
+        # Create decoder networks
+        self.observation_decoders = nn.ModuleDict()
         
         for obs_type, config in observation_config.items():
-            # Create embedder for this observation type
-            self.observation_embedders[obs_type] = utils.make_mlp(
-                [config['dim']] + self.mlp_blueprint_end
+            # Create encoder (input features -> hidden)
+            self.observation_encoders[obs_type] = nn.Sequential(
+                utils.make_mlp([config['dim'], self.hidden_dim * 2]),
+                nn.LayerNorm(self.hidden_dim * 2),
+                nn.ReLU(),
+                utils.make_mlp([self.hidden_dim * 2, self.hidden_dim])
             )
             
-            # Create graph networks for mesh mapping
-            self.observation_to_mesh[obs_type] = InteractionNet(
-                edge_index=None,  # Will be set in build_observation_graphs
-                input_dim=self.args.hidden_dim,
-                hidden_layers=self.args.hidden_layers,
-                update_edges=False
+            # Create embedder (processes encoded features)
+            self.observation_embedders[obs_type] = nn.Sequential(
+                utils.make_mlp([self.hidden_dim] + self.mlp_blueprint),
+                nn.LayerNorm(self.hidden_dim)
             )
             
-            self.mesh_to_observation[obs_type] = InteractionNet(
-                edge_index=None,  # Will be set in build_observation_graphs
-                input_dim=self.args.hidden_dim,
-                hidden_layers=self.args.hidden_layers,
-                update_edges=False
+            # Create observation-to-mesh network
+            self.observation_to_mesh[obs_type] = GATConv(
+                in_channels=self.hidden_dim,
+                out_channels=self.hidden_dim,
+                heads=self.num_heads,
+                concat=False
+            )
+            
+            # Create mesh-to-observation network
+            self.mesh_to_observation[obs_type] = GATConv(
+                in_channels=self.hidden_dim,
+                out_channels=self.hidden_dim,  # Keep in hidden dim for decoder
+                heads=self.num_heads,
+                concat=False
+            )
+            
+            # Create decoder (hidden -> output features)
+            self.observation_decoders[obs_type] = nn.Sequential(
+                utils.make_mlp([self.hidden_dim, self.hidden_dim * 2]),
+                nn.LayerNorm(self.hidden_dim * 2),
+                nn.ReLU(),
+                utils.make_mlp([self.hidden_dim * 2, config['dim']])
             )
 
     def get_num_mesh(self):
@@ -125,19 +206,15 @@ class HeteroObservationGraphModel(ARModel):
                 {'temperature': tensor of locations, ...}
         """
         for obs_type, locations in observation_locations.items():
-            # Find K nearest mesh nodes for each observation location
-            edges = utils.compute_knn_edges(
-                locations,
-                self.mesh_points,
-                k=3  # Could be made configurable per observation type
-            )
-            self.obs_to_mesh_edges[obs_type] = edges
+            self.create_obs_conn_mesh(bin_data)
+            
+            self.obs_to_mesh_edges[obs_type] = self.o2m_graph["edge_index"]
             # Reverse edges for mesh to observation mapping
-            self.mesh_to_obs_edges[obs_type] = edges.flip(0)
+            self.mesh_to_obs_edges[obs_type] = self.m2o_graph["edge_index"]
             
             # Update edge indices in graph networks
-            self.observation_to_mesh[obs_type].edge_index = edges
-            self.mesh_to_observation[obs_type].edge_index = edges.flip(0)
+            self.observation_to_mesh[obs_type].edge_index = self.o2m_graph["edge_index"]
+            self.mesh_to_observation[obs_type].edge_index = self.m2o_graph["edge_index"]
 
     def combine_features(self, feature_list: List[torch.Tensor]) -> torch.Tensor:
         """
@@ -160,6 +237,7 @@ class HeteroObservationGraphModel(ARModel):
         )
         
         return combined
+
     def create_mesh_structures(self):
         """
         Create or load the static mesh structure for the domain
@@ -177,426 +255,93 @@ class HeteroObservationGraphModel(ARModel):
         # Set instance attributes
         self.mesh_structure = mesh_data
         
-    def create_obs_conn_mesh(self, bin_data):
-        """
-        Set graph structures from the provided GraphDataset.
-        
-        Args:
-            dataset: GraphDataset instance containing mesh and grid structures
-        """
-
-        transformer = create_transformer()
-        lat_deg = np.degrees(bin_data['input_features_final'][:,0].numpy())
-        lon_deg = np.degrees(bin_data['input_features_final'][:,1].numpy())
-        lon_lcc, lat_lcc = transformer.transform(lon_deg, lat_deg)
-        coords = np.column_stack((lon_lcc, lat_lcc))
-        G_bottom_mesh = self.mesh_structure['G_bottom_mesh']
-        all_mesh_nodes = self.mesh_structure['all_mesh_nodes']
-        # Create observation to mesh and mesh-to-observation graphs
-        
-        self.o2m_graph = create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, self.args)
-        # self.m2o_graph = create_obs_conn_mesh()
-
-        # TODO Update GNN with correct edge indices
-        # self.mesh_gnn.edge_index = self.mesh_structure.edge_index
-        
-        # Store edge features if available
-        # if hasattr(dataset, 'edge_features'):
-        #     self.edge_features = dataset.edge_features
 
     def predict_step(
-        self, 
-        observations: Dict[str, Tuple[torch.Tensor, torch.Tensor]], 
-        prev_observations: Optional[Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = None
+        self,
+        batch_data: Dict
     ) -> Dict[str, torch.Tensor]:
         """
         Predict next state for each observation type using the mesh structure.
-        Handles batched inputs where each tensor has shape (batch_size, ...).
         
         Args:
-            observations: Current observations for each type
-                {'temperature': (locations [B,N,2], values [B,N,D]), ...}
-            prev_observations: Previous observations if available
-                Same structure as observations
+            batch_data: Dictionary containing:
+                - observations: Dict[str, Tuple[torch.Tensor, torch.Tensor]]
+                    {'obs_type': (locations [B,N,2], values [B,N,D]), ...}
+                - obs_graphs: Dict[str, Dict[str, Data]]
+                    {'obs_type': {'o2m': graph, 'm2o': graph}, ...}
         
         Returns:
             Dictionary mapping observation types to their predicted values
-                {'temperature': predicted_values [B,N,D], ...}
+                {'obs_type': predicted_values [B,N,D], ...}
         """
-        batch_size = next(iter(observations.values()))[1].shape[0]
-        device = next(iter(observations.values()))[1].device
+        observations = batch_data['observations']
+        obs_graphs = batch_data['obs_graphs']
         
-        self.create_obs2mesh(observations)
-        self.create_mesh2obs(observations)
+        # Get batch info
+        batch_size = next(iter(observations.values()))[0].shape[0]
+        device = next(iter(observations.values()))[0].device
+        
+        # Initialize mesh features for the batch
+        mesh_features = self.initialize_mesh_features(batch_size, device)
         
         # Process each observation type and map to mesh
         mesh_features_list = []
         for obs_type, (locations, values) in observations.items():
-            # Reshape batch dimension for locations
-            flat_locations = locations.reshape(-1, 2)  # [B*N, 2]
+            # Get the graph for this observation type
+            o2m_graph = obs_graphs[obs_type]['o2m']
             
-            # Find nearest mesh nodes for these observations
-            if obs_type not in self.obs_to_mesh_edges:
-                edges = self.knn_search(flat_locations, self.mesh_graph.pos)
-                
-                # Adjust edge indices for batching
-                num_mesh_nodes = self.mesh_graph.pos.shape[0]
-                batch_offset = torch.arange(batch_size, device=device).view(-1, 1) * num_mesh_nodes
-                batch_offset = batch_offset.repeat(1, edges.shape[1]).view(-1)
-                
-                # Apply batch offsets to edges
-                edges = edges + batch_offset.unsqueeze(0)
-                
-                self.obs_to_mesh_edges[obs_type] = edges
-                self.mesh_to_obs_edges[obs_type] = edges.flip(0)
+            # Encode observation values
+            encoded_obs = self.observation_encoders[obs_type](values)
             
-            # Embed observations
-            flat_values = values.reshape(-1, values.shape[-1])  # [B*N, D]
-            obs_features = self.observation_embedders[obs_type](flat_values)
+            # Embed encoded features
+            embedded_obs = self.observation_embedders[obs_type](encoded_obs)
             
-            # Map to mesh using KNN edges
+            # Use observation graph to propagate features to mesh
             mesh_features = self.observation_to_mesh[obs_type](
-                obs_features,
-                None,  # No receiver features initially
-                edge_index=self.obs_to_mesh_edges[obs_type]
+                embedded_obs,
+                mesh_features,  # Now properly initialized for batch
+                edge_index=o2m_graph.edge_index
             )
-            
-            # Reshape back to batched form
-            mesh_features = mesh_features.view(batch_size, -1, mesh_features.shape[-1])  # [B, M, D]
             mesh_features_list.append(mesh_features)
         
-        # Combine features on mesh
+        # Combine features from all observation types on mesh
         mesh_features = self.combine_features(mesh_features_list)
         
-        # Process on mesh using mesh graph structure (handle each batch independently)
+        # Process on mesh using InteractionNet
         mesh_features_flat = mesh_features.reshape(-1, mesh_features.shape[-1])  # [B*M, D]
         
-        # Adjust mesh edge indices for batching
-        batch_mesh_edges = []
-        num_mesh_nodes = self.mesh_graph.pos.shape[0]
-        for b in range(batch_size):
-            offset = b * num_mesh_nodes
-            batch_edges = self.mesh_graph.edge_index + offset
-            batch_mesh_edges.append(batch_edges)
-        batch_mesh_edges = torch.cat(batch_mesh_edges, dim=1)
+        # Create batched mesh edges
+        batch_mesh_edges = self.create_batch_mesh_edges(batch_size, device)
         
-        # Process on mesh
+        # Process features on mesh using InteractionNet
         mesh_features_processed = self.mesh_gnn(
-            mesh_features_flat,
-            edge_index=batch_mesh_edges
+            x=mesh_features_flat,
+            edge_index=batch_mesh_edges,
+            edge_attr=None  # No edge features for now
         )
         
         # Reshape back to batched form
-        mesh_features = mesh_features_processed.view(batch_size, -1, mesh_features_processed.shape[-1])  # [B, M, D]
+        mesh_features = mesh_features_processed.reshape(batch_size, -1, self.hidden_dim)
         
-        # Map back to observation locations
+        # Map processed features back to observations
         predictions = {}
         for obs_type, (locations, values) in observations.items():
-            # Flatten for message passing
-            mesh_features_flat = mesh_features.reshape(-1, mesh_features.shape[-1])  # [B*M, D]
+            # Get the graph for this observation type
+            m2o_graph = obs_graphs[obs_type]['m2o']
             
-            # Map back using batched edges
-            obs_pred = self.mesh_to_observation[obs_type](
-                mesh_features_flat,
-                None,  # No receiver features needed
-                edge_index=self.mesh_to_obs_edges[obs_type]
+            # Get encoded features for skip connection
+            encoded_obs = self.observation_encoders[obs_type](values)
+            
+            # Propagate features back to observations
+            obs_features = self.mesh_to_observation[obs_type](
+                mesh_features,
+                self.observation_embedders[obs_type](encoded_obs),  # Re-embed encoded for skip
+                edge_index=m2o_graph.edge_index
             )
             
-            # Reshape to match input batch shape
-            obs_pred = obs_pred.view(batch_size, -1, obs_pred.shape[-1])  # [B, N, D]
-            predictions[obs_type] = obs_pred
+            # Decode final predictions
+            predictions[obs_type] = self.observation_decoders[obs_type](obs_features)
         
         return predictions
 
-    def plot_mesh_structure(self, title: str = "Mesh Structure"):
-        """
-        Visualize the mesh graph structure.
-        Uses create_mesh.plot_graph utility.
-        """
-        from .. import create_mesh
-        import matplotlib.pyplot as plt
-        
-        fig, ax = create_mesh.plot_graph(
-            self.mesh_graph,
-            title=title
-        )
-        return fig, ax
-    
-    def to_graph_data(self, observations: Dict[str, Tuple[torch.Tensor, torch.Tensor]], batch_idx: int = 0) -> Data:
-        """
-        Convert observations to PyTorch Geometric Data object.
-        
-        Args:
-            observations: Dictionary of observations
-            batch_idx: Batch index for this data point
-        
-        Returns:
-            PyTorch Geometric Data object
-        """
-        # Collect all observation features
-        obs_x = []
-        obs_pos = []
-        obs_type_indices = []
-        
-        for idx, (obs_type, (locations, values)) in enumerate(observations.items()):
-            obs_x.append(values)
-            obs_pos.append(locations)
-            obs_type_indices.extend([idx] * len(locations))
-        
-        # Concatenate all observations
-        x = torch.cat(obs_x, dim=0)
-        pos = torch.cat(obs_pos, dim=0)
-        obs_type = torch.tensor(obs_type_indices, dtype=torch.long)
-        
-        # Create edge indices using KNN
-        edge_index = self.knn_search(pos, self.mesh_graph.pos)
-        
-        # Create PyG Data object
-        data = Data(
-            x=x,
-            pos=pos,
-            edge_index=edge_index,
-            obs_type=obs_type,
-            mesh_pos=self.mesh_graph.pos,
-            mesh_edge_index=self.mesh_graph.edge_index,
-            batch=torch.full((len(x),), batch_idx, dtype=torch.long)
-        )
-        
-        return data
-    
-    def process_batch(self, batch: Batch) -> Dict[str, torch.Tensor]:
-        """
-        Process a batch of graph data.
-        
-        Args:
-            batch: PyTorch Geometric Batch object
-        
-        Returns:
-            Dictionary of predictions for each observation type
-        """
-        # Embed observations
-        obs_features = []
-        for obs_type, embedder in self.observation_embedders.items():
-            mask = batch.obs_type == list(self.observation_types.keys()).index(obs_type)
-            if mask.any():
-                obs_feat = embedder(batch.x[mask])
-                obs_features.append(obs_feat)
-        
-        # Map to mesh
-        mesh_features = []
-        for obs_type, mapper in self.observation_to_mesh.items():
-            mask = batch.obs_type == list(self.observation_types.keys()).index(obs_type)
-            if mask.any():
-                mesh_feat = mapper(
-                    obs_features[list(self.observation_types.keys()).index(obs_type)],
-                    None,
-                    edge_index=batch.edge_index
-                )
-                mesh_features.append(mesh_feat)
-        
-        # Combine and process on mesh
-        mesh_features = self.combine_features(mesh_features)
-        mesh_features = self.mesh_gnn(
-            mesh_features,
-            edge_index=batch.mesh_edge_index
-        )
-        
-        # Map back to observations
-        predictions = {}
-        for obs_type in self.observation_types:
-            mask = batch.obs_type == list(self.observation_types.keys()).index(obs_type)
-            if mask.any():
-                pred = self.mesh_to_observation[obs_type](
-                    mesh_features,
-                    None,
-                    edge_index=batch.edge_index.flip(0)
-                )
-                predictions[obs_type] = pred[mask]
-        
-        return predictions
-
-    def test_batched_processing(self, batch_size: int = 2, num_obs: int = 100):
-        """
-        Test batched processing to verify correctness.
-        
-        Args:
-            batch_size: Number of batches to test
-            num_obs: Number of observations per type
-        
-        Returns:
-            Dict containing test results and any errors found
-
-        Example usage:
-        model = HeteroObservationGraphModel(args)
-        test_results = model.test_batched_processing(batch_size=3, num_obs=100)
-        """
-        import torch
-        import numpy as np
-        
-        # Create synthetic test data
-        test_obs = {
-            'temperature': (
-                # Random 2D locations
-                torch.randn(batch_size, num_obs, 2),
-                # Random scalar values
-                torch.randn(batch_size, num_obs, 1)
-            ),
-            'wind': (
-                # Same locations as temperature
-                torch.randn(batch_size, num_obs, 2),
-                # Random 2D vector values
-                torch.randn(batch_size, num_obs, 2)
-            )
-        }
-        
-        # Initialize networks if not done
-        if not self.observation_embedders:
-            self.setup_observation_networks({
-                'temperature': {'dim': 1},
-                'wind': {'dim': 2}
-            })
-        
-        # Run prediction
-        results = {}
-        try:
-            # Test shape preservation
-            predictions = self.predict_step(test_obs)
-            
-            for obs_type, (locations, values) in test_obs.items():
-                pred = predictions[obs_type]
-                results[f"{obs_type}_shape_correct"] = (
-                    pred.shape[0] == batch_size and
-                    pred.shape[1] == num_obs and
-                    pred.shape[2] == values.shape[2]
-                )
-            
-            # Test edge connectivity
-            for obs_type in test_obs:
-                edges = self.obs_to_mesh_edges[obs_type]
-                results[f"{obs_type}_edge_indices_valid"] = (
-                    edges.max() < batch_size * self.mesh_graph.pos.shape[0] and
-                    edges.min() >= 0
-                )
-            
-            # Test feature propagation (no NaNs or infinities)
-            for obs_type, pred in predictions.items():
-                results[f"{obs_type}_values_valid"] = (
-                    not torch.isnan(pred).any() and
-                    not torch.isinf(pred).any()
-                )
-            
-            # Test batch independence
-            # Predictions for different batches should be different
-            for obs_type, pred in predictions.items():
-                batch_diffs = []
-                for i in range(batch_size):
-                    for j in range(i+1, batch_size):
-                        diff = (pred[i] - pred[j]).abs().mean().item()
-                        batch_diffs.append(diff)
-                results[f"{obs_type}_batch_independent"] = np.mean(batch_diffs) > 0
-            
-            results["overall_success"] = all(results.values())
-            
-        except Exception as e:
-            results["error"] = str(e)
-            results["overall_success"] = False
-        
-        return results
-
-    def plot_observations_on_mesh(
-        self,
-        observations: Dict[str, Tuple[torch.Tensor, torch.Tensor]],
-        values_key: str = None,
-        title: str = None,
-        ax = None,
-        **kwargs
-    ):
-        """
-        Plot observations on top of the mesh structure.
-        
-        Args:
-            observations: Dictionary of observation locations and values
-            values_key: Which observation type's values to plot
-            title: Plot title
-            ax: Matplotlib axis to plot on
-            **kwargs: Additional arguments for scatter plot
-        """
-        import matplotlib.pyplot as plt
-        import numpy as np
-        
-        if ax is None:
-            fig, ax = self.plot_mesh_structure(title="Mesh")
-        
-        # Plot observations
-        for obs_type, (locations, values) in observations.items():
-            if values_key is not None and obs_type != values_key:
-                continue
-                
-            # Get colors from values if provided
-            if values is not None:
-                colors = values.detach().cpu().numpy()
-                if len(colors.shape) > 1:
-                    colors = np.mean(colors, axis=-1)  # Average if multi-dimensional
-            else:
-                colors = None
-            
-            # Plot observation points
-            locations_np = locations.detach().cpu().numpy()
-            scatter = ax.scatter(
-                locations_np[:, 0],
-                locations_np[:, 1],
-                c=colors,
-                label=obs_type,
-                **kwargs
-            )
-            
-            # Add colorbar if values provided
-            if values is not None:
-                plt.colorbar(scatter, ax=ax)
-        
-        if title:
-            ax.set_title(title)
-        ax.legend()
-        
-        return ax
-    
-    def visualize_prediction(
-        self,
-        observations: Dict[str, Tuple[torch.Tensor, torch.Tensor]],
-        predictions: Dict[str, torch.Tensor],
-        obs_type: str = None
-    ):
-        """
-        Visualize observations and their predictions.
-        
-        Args:
-            observations: Original observations
-            predictions: Predicted values
-            obs_type: Which observation type to visualize
-        """
-        import matplotlib.pyplot as plt
-        
-        if obs_type is None:
-            obs_type = next(iter(observations.keys()))
-        
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Plot original observations
-        self.plot_observations_on_mesh(
-            {obs_type: observations[obs_type]},
-            title=f"Original {obs_type}",
-            ax=ax1
-        )
-        
-        # Plot predictions
-        pred_obs = {
-            obs_type: (observations[obs_type][0], predictions[obs_type])
-        }
-        self.plot_observations_on_mesh(
-            pred_obs,
-            title=f"Predicted {obs_type}",
-            ax=ax2
-        )
-        
-        plt.tight_layout()
-        return fig
+  

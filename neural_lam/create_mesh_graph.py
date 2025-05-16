@@ -622,6 +622,13 @@ def create_transformer():
     transformer = Transformer.from_crs("EPSG:4326", lcc_crs, always_xy=True)
     return transformer
     
+def project_coords(lat, lon):
+    transformer = create_transformer()
+    lon_deg = np.degrees(lon)
+    lat_deg = np.degrees(lat)
+    lon_lcc, lat_lcc = transformer.transform(lon_deg, lat_deg)
+    coords = np.column_stack((lon_lcc, lat_lcc))
+    return coords
 
 def setup_lambert_projection( params=None):
     """

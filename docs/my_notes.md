@@ -1,3 +1,30 @@
+### Benefits of Creating Graphs in Dataset:
+
+1. **Memory Efficiency**
+   - Graphs created once per sample
+   - No redundant graph creation during inference
+   - Efficient caching of graph structures
+   - Memory released after batch processing
+
+2. **Performance Optimization**
+   - Parallel data loading includes graph creation
+   - Graphs created during data loading pipeline
+   - Reduced computation during inference
+   - Better utilization of DataLoader workers
+
+3. **Clean Architecture**
+   - Clear separation of data preparation and model logic
+   - Model focuses purely on inference
+   - Easier to debug graph creation issues
+   - More maintainable codebase
+
+4. **Batch Processing**
+   - DataLoader handles batching of observations and graphs
+   - Ensures data-graph consistency
+   - Better handling of variable-sized observations
+   - Natural integration with PyTorch ecosystem
+
+
 # WeatherDataset
 
 This is a custom PyTorch Dataset for handling all related data and used 
