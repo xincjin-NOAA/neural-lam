@@ -9,6 +9,126 @@ from timing_utils import timing_resource_decorator
 
 
 @timing_resource_decorator
+def convert_to_time_binned_zarr(
+    input_zarr_path: str,
+    output_zarr_path: str,
+    observation_config: Dict,
+    bin_size: str = '12h'
+) -> None:
+    """
+    Convert a regular zarr store to a time-binned zarr store for efficient access.
+    This preserves all the original data but organizes it by time bins.
+    
+    Args:
+        input_zarr_path: Path to input zarr store
+        output_zarr_path: Path to output zarr store
+        observation_config: Configuration for observation types
+        bin_size: Size of time bins (e.g., '12h')
+    """
+    # Validate bin_size format
+    valid_units = ['h', 'H']
+    if not any(bin_size.endswith(unit) for unit in valid_units):
+        raise ValueError(
+            f"Invalid bin_size format: {bin_size}\n"
+            f"Must end with one of: {valid_units}\n"
+            f"Examples: '6h' for 6 hours")
+            
+    # Open input zarr store
+    z_dict = {}
+    for obs_type in observation_config.keys():
+        z_dict[obs_type] = zarr.open(str(Path(input_zarr_path) / obs_type))
+    
+    # Get all timestamps and sort them
+    all_times = []
+    for obs_type, z in z_dict.items():
+        for key in observation_config[obs_type].keys():
+            times = pd.to_datetime(z[key]['time'][:], unit='s')
+            all_times.extend(times)
+    
+    all_times = sorted(set(all_times))
+    time_bins = pd.date_range(
+        start=min(all_times),
+        end=max(all_times),
+        freq=bin_size
+    )
+    
+    # Create output zarr store organized by time bins
+    store = zarr.DirectoryStore(output_zarr_path)
+    root = zarr.group(store=store)
+    
+    # Create groups for each time bin
+    for i in range(len(time_bins) - 1):
+        bin_start = time_bins[i]
+        bin_end = time_bins[i + 1]
+        bin_name = f'bin_{bin_start.strftime("%Y%m%d_%H%M")}_to_{bin_end.strftime("%Y%m%d_%H%M")}'
+        
+        bin_group = root.create_group(bin_name)
+        
+        # For each observation type
+        for obs_type, z in z_dict.items():
+            obs_group = bin_group.create_group(obs_type)
+            
+            for key in observation_config[obs_type].keys():
+                # Get data for this time bin
+                times = pd.to_datetime(z[key]['time'][:], unit='s')
+                mask = (times >= bin_start) & (times < bin_end)
+                
+                if not mask.any():
+                    continue
+                
+                # Create dataset for this observation type
+                data_group = obs_group.create_group(key)
+                
+                # Process basic fields
+                for field in z[key].keys():
+                    data = z[key][field][:][mask]
+                    data_group.create_dataset(
+                        name=field,
+                        data=data,
+                        chunks=True
+                    )
+                
+                # Process lat/lon features
+                lat = data_group['latitude'][:]
+                lon = data_group['longitude'][:]
+                lat_rad = np.radians(lat)
+                lon_rad = np.radians(lon)
+                
+                data_group.create_dataset('lat_sin', data=np.sin(lat_rad), chunks=True)
+                data_group.create_dataset('lat_cos', data=np.cos(lat_rad), chunks=True)
+                data_group.create_dataset('lon_sin', data=np.sin(lon_rad), chunks=True)
+                data_group.create_dataset('lon_cos', data=np.cos(lon_rad), chunks=True)
+                
+                # Process time features
+                times = data_group['time'][:]
+                timestamps = pd.to_datetime(times, unit='s')
+                dayofyear = np.array([
+                    (timestamp.timetuple().tm_yday - 1 +
+                     (timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second) / 86400) / 365.24219
+                    for timestamp in timestamps
+                ])
+                data_group.create_dataset('dayofyear', data=dayofyear, chunks=True)
+                
+                # Process features
+                if 'features' in observation_config[obs_type][key]:
+                    feature_data = np.column_stack([
+                        data_group[feat][:] for feat in observation_config[obs_type][key]['features']
+                    ])
+                    scaler = MinMaxScaler()
+                    feature_data_norm = scaler.fit_transform(feature_data)
+                    data_group.create_dataset('features_normalized', data=feature_data_norm, chunks=True)
+                    data_group.create_dataset('feature_scaler_min', data=scaler.data_min_)
+                    data_group.create_dataset('feature_scaler_max', data=scaler.data_max_)
+                
+                # Process metadata for satellite data
+                if obs_type == 'satellite' and 'metadata' in observation_config[obs_type][key]:
+                    metadata = np.column_stack([
+                        data_group[meta][:] for meta in observation_config[obs_type][key]['metadata']
+                    ])
+                    data_group.create_dataset('metadata', data=metadata, chunks=True)
+
+
+@timing_resource_decorator
 def reorganize_zarr_by_time(
     input_zarr_path: str,
     output_zarr_path: str,
