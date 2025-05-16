@@ -408,7 +408,11 @@ def _create_interlevel_connections(G, mesh_levels, first_index_level, args):
         down_graphs.append(G_down)
         
         if args.plot:
-            plot_graphs(G_down, pyg_up, from_level, to_level)
+            plot_graph(
+                    pyg_up, title=f"Down graph, {from_level} -> {to_level}"
+                )
+            plt.show()
+
     
     return up_graphs, down_graphs
         

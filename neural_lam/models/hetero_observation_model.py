@@ -3,6 +3,8 @@ Implementation of a graph neural network model for processing heterogeneous obse
 with different variable types and spatial locations.
 """
 
+import numpy as np
+import os
 import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
@@ -11,7 +13,7 @@ from torch_geometric.data import Data, Dataset, Batch
 from .ar_model import ARModel
 from .. import utils
 from ..interaction_net import InteractionNet
-from ..create_mesh_graph import create_mesh_structures, create_obs_conn_mesh
+from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh
 
 class HeteroObservationGraphModel(ARModel):
     """
@@ -28,6 +30,7 @@ class HeteroObservationGraphModel(ARModel):
 
     def __init__(self, args):
         super().__init__(args)
+        self.args = args
         
         # Dictionary to store observation type configurations
         self.observation_types = {}
@@ -161,15 +164,20 @@ class HeteroObservationGraphModel(ARModel):
         """
         Create or load the static mesh structure for the domain
         """
+        grid_coordinates = np.load(os.path.join('/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data/rrfs_15km_example/static', 
+                                  '15km_rrfs-grib-grid_xy_coordinates.npy'))
+        save_path = './graph_mesh'
         # Get mesh structures from cached function
         mesh_data = create_mesh_structure(
-            args        )
+            xy=grid_coordinates,
+            args=self.args,
+            graph_dir_path=save_path
+            )
         
         # Set instance attributes
-        self.mesh_structure = mesh_data["mesh_structure"]
-        self.mesh_points = mesh_data["mesh_points"]
-
-    def create_obs_conn_mesh(self):
+        self.mesh_structure = mesh_data
+        
+    def create_obs_conn_mesh(self, bin_data):
         """
         Set graph structures from the provided GraphDataset.
         
