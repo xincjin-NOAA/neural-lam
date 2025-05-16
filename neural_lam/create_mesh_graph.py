@@ -591,6 +591,38 @@ def some_function( coords, proj_params=None):
         # Use coordinates as is
         projected_coords = coords
 
+from pyproj import Proj, CRS, Transformer
+
+def create_transformer():
+    # projection:
+    #   class: LambertConformal
+    #   kwargs:
+    #     central_longitude: -97.5  # Converted from LoV 262.5 degrees as 360 - 262.5 = 97.5
+    #     central_latitude: 38.5  # Directly from LatD (Latitude of origin)
+    #     standard_parallels: [38.5, 38.5]  # From Latin1 and Latin2
+    
+    # Lambert Conformal Conic projection parameters
+    kwargs = {
+        "proj": "lcc",
+        "central_longitude": -97.5,
+        "central_latitude": 38.5,
+        "standard_parallels": [38.5, 38.5],
+        "ellps": "WGS84",
+        "x_0": 0,
+        "y_0": 0,
+    }
+    
+    # Create CRS and Transformer
+    lcc_crs = CRS.from_proj4(f"+proj=lcc +lat_1={kwargs['standard_parallels'][0]} "
+                             f"+lat_2={kwargs['standard_parallels'][1]} "
+                             f"+lat_0={kwargs['central_latitude']} "
+                             f"+lon_0={kwargs['central_longitude']} "
+                             f"+ellps={kwargs['ellps']} +x_0={kwargs['x_0']} +y_0={kwargs['y_0']}")
+    
+    transformer = Transformer.from_crs("EPSG:4326", lcc_crs, always_xy=True)
+    return transformer
+    
+
 def setup_lambert_projection( params=None):
     """
     Setup Lambert Conformal projection with default or custom parameters.

@@ -12,67 +12,10 @@ from pytorch_lightning.loggers import TensorBoardLogger
 import argparse
 from pathlib import Path
 
-from neural_lam.models import HeteroObservationGraphModel
-from neural_lam.graph_dataset import GraphDataset
-from neural_lam import utils
+from .models.hetero_observation_model import HeteroObservationGraphModel
+from .graph_dataset import GraphDataset
+from .graph_data_module import WeatherDataModule
 
-class WeatherLightningModule(pl.LightningModule):
-    def __init__(self, args):
-        super().__init__()
-        self.save_hyperparameters(args)
-        self.model = HeteroObservationGraphModel(args)
-        self.criterion = nn.MSELoss()
-        
-    def forward(self, batch):
-        return self.model(batch)
-    
-    def training_step(self, batch, batch_idx):
-        predictions = self(batch)
-        loss = 0
-        
-        # Compute loss for each observation type
-        for obs_type in predictions:
-            target = batch[f"{obs_type}_target"]
-            type_loss = self.criterion(predictions[obs_type], target)
-            self.log(f"train_loss_{obs_type}", type_loss)
-            loss += type_loss
-            
-        self.log("train_loss", loss)
-        return loss
-    
-    def validation_step(self, batch, batch_idx):
-        predictions = self(batch)
-        loss = 0
-        
-        for obs_type in predictions:
-            target = batch[f"{obs_type}_target"]
-            type_loss = self.criterion(predictions[obs_type], target)
-            self.log(f"val_loss_{obs_type}", type_loss)
-            loss += type_loss
-            
-        self.log("val_loss", loss)
-        return loss
-    
-    def configure_optimizers(self):
-        optimizer = Adam(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay
-        )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.5,
-            patience=5,
-            verbose=True
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val_loss"
-            }
-        }
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train HeteroObservationGraphModel with multi-GPU support")
@@ -122,64 +65,21 @@ def parse_args():
                         help="Start date for training data")
     data_group.add_argument("--end_date", type=str, default="2023-12-31",
                         help="End date for training data")
-    data_group.add_argument("--satellite_id", type=str, default="sat1",
-                        help="Satellite ID for data selection")
+    data_group.add_argument("--observation_config", type=dict, 
+                        help="observation_config for data selection")
+    data_group.add_argument("--data_config", type=str, 
+                        help="observation_config for data selection")
+
+    #args = parser.parse_args()
+    # Use parse_known_args() to avoid crashing in notebook environments
+    args, unknown = parser.parse_known_args()
     
-    args = parser.parse_args()
-    
-    # Validate paths
-    if args.data_path == "/path/to/your/data":
-        print("WARNING: Using default data path. Please update --data_path to your actual data directory.")
+    # # Validate paths
+    # if args.data_path == "/path/to/your/data":
+    #     print("WARNING: Using default data path. Please update --data_path to your actual data directory.")
     
     return args
 
-
-class WeatherDataModule(pl.LightningDataModule):
-    def __init__(self, args):
-        super().__init__()
-        self.args = args
-        self.dataset = None
-        
-    def setup(self, stage=None):
-        if self.dataset is None:
-            # Create dataset
-            self.dataset = GraphDataset(
-                data_path=self.args.data_path,
-                start_date=self.args.start_date,
-                end_date=self.args.end_date,
-                satellite_id=self.args.satellite_id,
-                mesh_resolution=self.args.mesh_resolution,
-                cutoff_factor=self.args.cutoff_factor,
-                num_neighbors=self.args.num_neighbors
-            )
-            self.dataset.setup()
-            
-            # Split dataset
-            train_size = int(0.8 * len(self.dataset))
-            val_size = len(self.dataset) - train_size
-            self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-                self.dataset, [train_size, val_size]
-            )
-    
-    def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=True,
-            num_workers=4,
-            persistent_workers=True,
-            pin_memory=True
-        )
-    
-    def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=False,
-            num_workers=4,
-            persistent_workers=True,
-            pin_memory=True
-        )
 
 def main(override_args=None):
     # Get command line arguments
@@ -191,7 +91,8 @@ def main(override_args=None):
             if hasattr(args, key):
                 setattr(args, key, value)
             else:
-                print(f"WARNING: Unknown argument '{key}' in override_args")
+                print(f"INFO: Adding new argument '{key}' to args")
+                setattr(args, key, value)
     
     # Convert devices to int if not 'auto'
     if args.devices != 'auto':
@@ -201,11 +102,11 @@ def main(override_args=None):
     datamodule = WeatherDataModule(args)
     
     # Initialize model
-    model = WeatherLightningModule(args)
+    model = HeteroObservationGraphModel(args)
     
     # Set graph structures from dataset
     datamodule.setup()
-    model.model.set_graph_structures(datamodule.dataset)
+    model.set_graph_structures(datamodule.dataset)
     
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -256,28 +157,56 @@ def main(override_args=None):
     return trainer, model, datamodule
 
 if __name__ == "__main__":
-    # Example 1: Using command line arguments
-    if len(sys.argv) > 1:
-        trainer, model, datamodule = main()
+    # CONUS data path:
+    data_path = "/scratch1/NCEPDEV/da/Ronald.McLaren/shared/ocelot/data_v2/"
     
-    # Example 2: Using programmatic overrides
-    else:
-        # Override default arguments
-        custom_args = {
-            "data_path": "/path/to/your/data",  # Update this path
-            "start_date": "2023-01-01",
-            "end_date": "2023-12-31",
-            "satellite_id": "sat1",
-            "batch_size": 32,
-            "hidden_dim": 64,
-            "strategy": "ddp",
-            "devices": "auto",
-            "precision": "16",
-            # Add any other arguments you want to override
+    # Observation configuration, will move to a config file later.
+    observation_config = {
+        "satellite": {
+            'atms': {
+                "sat_ids": [224, 225],
+                "features": [f"bt_channel_{i}" for i in range(1, 23)],
+                "metadata": ["sensorZenithAngle", "solarZenithAngle", "solarAzimuthAngle"]
+            },
+            # "iasi": ,
+            # "goes":,
+            # "ascat":
+        },
+        "conventional": {
+            # "radiosonde": ,
+            "pressure": {
+                "features": ["height", "stationPressure"]
+            },
+            # "surface_marine": ,
+            # "surface_land":
         }
-        
-        # Run with custom arguments
-        trainer, model, datamodule = main(override_args=custom_args)
+    }
+
+    args_dict = {
+        "data_path": data_path,
+        "observation_config": observation_config,
+        "start_date":  "2024-04-01",
+        "end_date":  "2024-04-04",
+        "levels": 4,
+        "plot": False,
+        "hierarchical": True,  # The last assignment overrides the previous one
+        "data_config": "/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data_config_15km.yaml",
+        "output_std": False,
+        "loss": "MSE",
+        "restore_opt": False,
+        "n_example_pred": 1,
+        "lr": 0.0001,
+        "graph": "hetero",
+        "hidden_dim": 64,
+        "hidden_layers": 16,
+        "mesh_resolution": 4,
+        "cutoff_factor": 0.67,
+        "num_neighbors": 2,
+        "step_length": 6
+    } 
+    
+    # Run with custom arguments
+    trainer, model, datamodule = main(override_args=args_dict)
     
     # Train the model
     trainer.fit(model, datamodule)

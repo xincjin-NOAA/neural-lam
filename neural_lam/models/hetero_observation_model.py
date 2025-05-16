@@ -13,7 +13,7 @@ from torch_geometric.data import Data, Dataset, Batch
 from .ar_model import ARModel
 from .. import utils
 from ..interaction_net import InteractionNet
-from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh
+from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh, create_transformer
 
 class HeteroObservationGraphModel(ARModel):
     """
@@ -184,11 +184,18 @@ class HeteroObservationGraphModel(ARModel):
         Args:
             dataset: GraphDataset instance containing mesh and grid structures
         """
- 
+
+        transformer = create_transformer()
+        lat_deg = np.degrees(bin_data['input_features_final'][:,0].numpy())
+        lon_deg = np.degrees(bin_data['input_features_final'][:,1].numpy())
+        lon_lcc, lat_lcc = transformer.transform(lon_deg, lat_deg)
+        coords = np.column_stack((lon_lcc, lat_lcc))
+        G_bottom_mesh = self.mesh_structure['G_bottom_mesh']
+        all_mesh_nodes = self.mesh_structure['all_mesh_nodes']
         # Create observation to mesh and mesh-to-observation graphs
         
-        self.o2m_graph = create_obs_conn_mesh()
-        self.m2o_graph = create_obs_conn_mesh()
+        self.o2m_graph = create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, self.args)
+        # self.m2o_graph = create_obs_conn_mesh()
 
         # TODO Update GNN with correct edge indices
         # self.mesh_gnn.edge_index = self.mesh_structure.edge_index
