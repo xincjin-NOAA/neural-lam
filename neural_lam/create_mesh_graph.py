@@ -624,8 +624,8 @@ def create_transformer():
     
 def project_coords(lat, lon):
     transformer = create_transformer()
-    lon_deg = np.degrees(lon)
-    lat_deg = np.degrees(lat)
+    lon_deg = lon
+    lat_deg = lat
     lon_lcc, lat_lcc = transformer.transform(lon_deg, lat_deg)
     coords = np.column_stack((lon_lcc, lat_lcc))
     return coords
@@ -687,6 +687,12 @@ def project_coordinates(coords, proj):
     x, y = proj(lons, lats)
     return np.column_stack((x, y))
 
+
+def check_nan(coords):
+    if np.isnan(coords).any() or np.isinf(coords).any():
+        print("coords contains NaN or Inf")
+
+        
     
 if __name__ == "__main__":
     main()

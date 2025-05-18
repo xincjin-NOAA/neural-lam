@@ -12,7 +12,7 @@ from functools import lru_cache
 from zarr.storage import LRUStoreCache
 
 from .process_timeseries import extract_features, organize_bins_times
-from .create_mesh import create_obs_conn_mesh, project_coords
+from .create_mesh_graph import create_obs_conn_mesh, project_coords
 
 class GraphDataset(Dataset):
     def __init__(
@@ -39,88 +39,58 @@ class GraphDataset(Dataset):
         """
         Prepare data for training/validation using time-binned zarr structure.
         """
-        # Open the time-binned zarr store
-        self.z = zarr.open(self.data_path)
-        
-        # Get all time bin names that fall within our date range
-        all_bin_names = []
-        for bin_name in self.z.keys():
-            bin_start = pd.to_datetime(bin_name.split('_')[1], format='%Y%m%d_%H%M')
-            if self.start_date <= bin_start < self.end_date:
-                all_bin_names.append(bin_name)
-        
+        if self.z is None:
+            self.z = {}
+            for obs_type in self.observation_config.keys():
+                self.z[obs_type] = {}
+                for key in self.observation_config[obs_type].keys():
+                    data_path = os.path.join(self.data_path, key) + ".zarr"
+                    self.z[obs_type][key] = zarr.open(LRUStoreCache(zarr.DirectoryStore(data_path), max_size=2_000_000_000), mode="r")
+                   
+        self.data_summary = organize_bins_times(self.z, self.start_date, self.end_date, self.observation_config)
+        self.data_summary = extract_features(self.z, self.data_summary, self.observation_config)
+
+        all_bin_names = list(self.data_summary.keys())
         self.sample_names = sorted(all_bin_names)
   
     def __getitem__(self, idx: int) -> Dict:
         """Get a single sample from the dataset with its observation-mesh graphs"""
         # Get the time bin name for this index
         bin_name = self.sample_names[idx]
-        bin_group = self.z[bin_name]
-        
-        # Create observation data dictionary
-        observations = {}
-        obs_graphs = {}
+        bin_data = self.data_summary[bin_name]
+        print(bin_data.keys())
         
         # Process each observation type
         for obs_type in self.observation_config.keys():
-            if obs_type not in bin_group:
-                continue
-                
-            obs_group = bin_group[obs_type]
-            # Combine data from all keys for this observation type
-            all_locations = []
-            all_values = []
-            
-            for key in self.observation_config[obs_type].keys():
-                if key not in obs_group:
-                    continue
-                    
-                data_group = obs_group[key]
-                # Get locations and values
-                locations = torch.tensor(data_group['locations'][:], dtype=torch.float32)
-                values = torch.tensor(data_group['values'][:], dtype=torch.float32)
-                
-                all_locations.append(locations)
-                all_values.append(values)
-            
-            if not all_locations:  # Skip if no data for this observation type
-                continue
-                
-            # Combine all locations and values
-            locations = torch.cat(all_locations, dim=0)
-            values = torch.cat(all_values, dim=0)
-            observations[obs_type] = (locations, values)
-            
-            # Create observation-mesh graph if mesh structure is available
-            if self.mesh_structure is not None:
+            for inst_name in self.observation_config[obs_type].keys():
+                inst_data = bin_data[obs_type][inst_name]
+                # Create observation-mesh graph 
                 # Project coordinates
                 coords = project_coords(
-                    locations[:, 0].numpy(),  # latitude
-                    locations[:, 1].numpy()   # longitude
+                    inst_data["input_lat_deg"],  # latitude
+                    inst_data["input_lon_deg"]  # longitude
                 )
-                    
-                # Create graphs for this observation type
-                obs_graphs[obs_type] = {
-                    'o2m': create_obs_conn_mesh(
+                
+                # Create graphs for this observation
+                inst_data['o2m'] = create_obs_conn_mesh(
                         coords,
                         self.mesh_structure['G_bottom_mesh'],
                         self.mesh_structure['all_mesh_nodes'],
-                        self.args
-                    ),
-                    'm2o': create_obs_conn_mesh(
-                        coords,
-                        self.mesh_structure['all_mesh_nodes'],
-                        self.mesh_structure['G_bottom_mesh'],
                         self.args
                     )
-                }
-        
-        return {
-            'observations': observations,
-            'obs_graphs': obs_graphs if self.mesh_structure is not None else None,
-            'bin_name': bin_name,
-            'bin_time': self.get_bin_time(idx)
-        }
+                
+                coords = project_coords(
+                    inst_data["target_lat_deg"],  # latitude
+                    inst_data["target_lon_deg"]  # longitude
+                )
+                inst_data['m2o'] = create_obs_conn_mesh(
+                        coords,
+                        self.mesh_structure['G_bottom_mesh'],
+                        self.mesh_structure['all_mesh_nodes'],
+                        self.args
+                    )
+                     
+        return bin_data
 
   
     def plot_weather_sample(self, sample_idx: int = 0, obs_type: str = None, figsize: Tuple[int, int] = (10, 10)):

@@ -1,81 +1,8 @@
 import numpy as np
 import pandas as pd
 import torch
-import zarr
-from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler
-from typing import Dict, List, Tuple
 from timing_utils import timing_resource_decorator
-
-
-@timing_resource_decorator
-def reorganize_zarr_by_time(
-    input_zarr_path: str,
-    output_zarr_path: str,
-    observation_config: Dict,
-    bin_size: str = '12h'
-) -> None:
-    """
-    Reorganize zarr data by time bins for efficient access.
-    
-    Args:
-        input_zarr_path: Path to input zarr store
-        output_zarr_path: Path to output zarr store
-        observation_config: Configuration for observation types
-        bin_size: Size of time bins (e.g., '12h')
-    """
-    # Open input zarr store
-    z_dict = {}
-    for obs_type in observation_config.keys():
-        z_dict[obs_type] = zarr.open(str(Path(input_zarr_path) / obs_type))
-    
-    # Get all timestamps and sort them
-    all_times = []
-    for obs_type, z in z_dict.items():
-        for key in observation_config[obs_type].keys():
-            times = pd.to_datetime(z[key]['time'][:], unit='s')
-            all_times.extend(times)
-    
-    all_times = sorted(set(all_times))
-    time_bins = pd.date_range(
-        start=min(all_times),
-        end=max(all_times),
-        freq=bin_size
-    )
-    
-    # Create output zarr store organized by time bins
-    store = zarr.DirectoryStore(output_zarr_path)
-    root = zarr.group(store=store)
-    
-    # Create groups for each time bin
-    for i in range(len(time_bins) - 1):
-        bin_start = time_bins[i]
-        bin_end = time_bins[i + 1]
-        bin_name = f'bin_{bin_start.strftime("%Y%m%d_%H%M")}_to_{bin_end.strftime("%Y%m%d_%H%M")}'
-        
-        bin_group = root.create_group(bin_name)
-        
-        # For each observation type
-        for obs_type, z in z_dict.items():
-            obs_group = bin_group.create_group(obs_type)
-            
-            for key in observation_config[obs_type].keys():
-                # Get data for this time bin
-                times = pd.to_datetime(z[key]['time'][:], unit='s')
-                mask = (times >= bin_start) & (times < bin_end)
-                
-                if not mask.any():
-                    continue
-                
-                # Create dataset for this observation type
-                data_group = obs_group.create_group(key)
-                for field in z[key].keys():
-                    data = z[key][field][:][mask]
-                    data_group.create_dataset(
-                        name=field,
-                        data=data,
-                        chunks=True
-                    )
 
 
 @timing_resource_decorator
