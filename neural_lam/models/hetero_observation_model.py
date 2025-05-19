@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
 from torch_geometric.data import Data, Dataset, Batch
+import torch
+import torch.nn as nn
 
 from .ar_model import ARModel
 from .. import utils
@@ -34,16 +36,18 @@ class HeteroObservationGraphModel(ARModel):
         self.hidden_dim = args.hidden_dim
         self.num_heads = args.num_heads
         
-        # Blueprint for observation MLPs
-        self.mlp_blueprint = [self.hidden_dim] * args.num_layers
-        
-        # Dictionary to store observation type configurations
-        self.observation_types = {}
-        
-        # Create dictionaries to store networks
+        # Initialize network dictionaries
+        self.observation_encoders = nn.ModuleDict()
         self.observation_embedders = nn.ModuleDict()
         self.observation_to_mesh = nn.ModuleDict()
         self.mesh_to_observation = nn.ModuleDict()
+        self.observation_decoders = nn.ModuleDict()
+        
+        # Initialize graph structures
+        self.mesh_structure = None  # Will be set in setup_mesh
+        self.mesh_graph = None      # Will be set in setup_mesh
+        self.m2o_graph = None       # Will be set during forward pass
+        self.o2m_graph = None       # Will be set during forward pass
         
         # Create mesh processing GNN
         self.mesh_gnn = InteractionNet(
@@ -53,8 +57,22 @@ class HeteroObservationGraphModel(ARModel):
             update_edges=False
         )
         
-        # Initialize mesh graph (will be set later)
-        self.mesh_graph = None
+        # Feature combination layers
+        self.mesh_feature_combiner = utils.make_mlp(
+            [self.hidden_dim * len(args.observation_config)] + 
+            [self.hidden_dim] * args.num_layers
+        )
+        
+        # Attention for feature combination
+        self.attention_layer = nn.MultiheadAttention(
+            embed_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            batch_first=True
+        )
+        
+        # Set up observation networks if config provided
+        if hasattr(args, 'observation_config') and args.observation_config:
+            self.setup_observation_networks(args.observation_config)
         
     def create_batch_mesh_edges(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """
@@ -88,45 +106,16 @@ class HeteroObservationGraphModel(ARModel):
         Returns:
             Tensor of shape [B, M, D] containing initialized mesh features
         """
-        return torch.zeros(
+        # Initialize mesh features with zeros
+        # Shape: [batch_size, num_mesh_nodes, hidden_dim]
+        mesh_features = torch.zeros(
             batch_size,
-            self.mesh_graph.pos.shape[0],
-            self.hidden_dim,
-            device=device
-        )
-            update_edges=False
+            self.mesh_graph.pos.shape[0],  # Number of mesh nodes
+            self.hidden_dim,               # Feature dimension
+            device=device                  # Same device as input
         )
         
-        if observation_config is not None:
-            self.setup_observation_networks(observation_config)
-        
-        # Initialize mesh graph attributes
-        self.mesh_graph = None
-        self.mesh_features = None
-        self.obs_to_mesh_edges = {}
-        self.mesh_to_obs_edges = {}
-        
-        # These will be set when processing observations
-        self.m2o_graph = None       # Will be set
-        self.o2m_graph = None       # Will be set
-        
-        # Feature combination layers
-        self.mesh_feature_combiner = utils.make_mlp(
-            [args.hidden_dim * len(self.observation_types)] + 
-            [args.hidden_dim] * args.hidden_layers
-        )
-        
-        # Attention for feature combination
-        self.attention_layer = nn.MultiheadAttention(
-            embed_dim=args.hidden_dim,
-            num_heads=4,
-            batch_first=True
-        )
-        
-        # Graph structures
-        self.mesh_structure = None  # Will be set
-        self.m2o_graph = None       # Will be set
-        self.o2m_graph = None       # Will be set
+        return mesh_features
 
     def setup_observation_networks(self, observation_config: Dict[str, Dict]):
         """
@@ -189,13 +178,22 @@ class HeteroObservationGraphModel(ARModel):
                 utils.make_mlp([self.hidden_dim * 2, config['dim']])
             )
 
-    def get_num_mesh(self):
+    def get_num_mesh(self) -> Tuple[int, int]:
         """
-        Compute number of mesh nodes from loaded features,
-        and number of mesh nodes that should be ignored in encoding/decoding
+        Get the number of mesh nodes and number of nodes to ignore.
+        
+        Returns:
+            Tuple containing:
+            - Number of mesh nodes in the graph
+            - Number of mesh nodes to ignore (usually 0)
+        
+        Raises:
+            RuntimeError: If mesh_graph is not initialized
         """
-        # TODO
-        return 100, 0  #  self.mesh_static_features.shape[0], 0
+        if self.mesh_graph is None:
+            raise RuntimeError("Mesh graph must be initialized before calling get_num_mesh")
+            
+        return self.mesh_graph.pos.shape[0], 0  # No nodes are ignored in our implementation
         
     def build_observation_graphs(self, observation_locations: Dict[str, torch.Tensor]):
         """
@@ -238,23 +236,46 @@ class HeteroObservationGraphModel(ARModel):
         
         return combined
 
-    def create_mesh_structures(self):
+    def create_mesh_structures(self) -> None:
         """
-        Create or load the static mesh structure for the domain
+        Create or load the static mesh structure for the domain.
+        This initializes both self.mesh_structure and self.mesh_graph.
+        
+        The mesh structure contains the basic grid topology and connectivity,
+        while mesh_graph is the PyG Data object used for graph operations.
+        
+        Raises:
+            FileNotFoundError: If grid coordinates file cannot be found
+            RuntimeError: If mesh creation fails
         """
-        grid_coordinates = np.load(os.path.join('/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data/rrfs_15km_example/static', 
-                                  '15km_rrfs-grib-grid_xy_coordinates.npy'))
-        save_path = './graph_mesh'
-        # Get mesh structures from cached function
-        mesh_data = create_mesh_structure(
-            xy=grid_coordinates,
-            args=self.args,
-            graph_dir_path=save_path
+        try:
+            # Load grid coordinates
+            grid_path = os.path.join(
+                '/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data/rrfs_15km_example/static',
+                '15km_rrfs-grib-grid_xy_coordinates.npy'
             )
-        
-        # Set instance attributes
-        self.mesh_structure = mesh_data
-        
+            grid_coordinates = np.load(grid_path)
+            
+            # Create or load mesh structure
+            save_path = './graph_mesh'
+            mesh_data = create_mesh_structure(
+                xy=grid_coordinates,
+                args=self.args,
+                graph_dir_path=save_path
+            )
+            
+            # Store both the mesh structure and graph
+            self.mesh_structure = mesh_data
+            self.mesh_graph = Data(
+                pos=torch.from_numpy(grid_coordinates).float(),
+                edge_index=torch.from_numpy(mesh_data['edge_index']).long(),
+                edge_attr=torch.from_numpy(mesh_data['edge_attr']).float() if 'edge_attr' in mesh_data else None
+            )
+            
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"Could not find grid coordinates file: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to create mesh structure: {e}")
 
     def predict_step(
         self,
