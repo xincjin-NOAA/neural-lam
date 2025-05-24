@@ -172,23 +172,11 @@ def extract_features(z_dict, data_summary, observation_config):
                 # === Normalize features ===
                 if obs_type == "satellite":
                     input_features_orig = np.column_stack([
-                            sin_lat,
-                            cos_lat,
-                            sin_lon,
-                            cos_lon,
-                            input_dayofyear,
                             metadata_input,
                             feature_input,
                         ])
                 else:
-                    input_features_orig = np.column_stack([
-                        sin_lat,
-                        cos_lat,
-                        sin_lon,
-                        cos_lon,
-                        input_dayofyear,
-                        feature_input,
-                    ])
+                    input_features_orig = feature_input
                 input_scaler = MinMaxScaler()
                 input_features_norm = input_scaler.fit_transform(input_features_orig)
                 target_features_orig = feature_target

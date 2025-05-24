@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
 from torch_geometric.data import Data, Dataset, Batch
+from torch_geometric.nn import GATConv
 import torch
 import torch.nn as nn
 
@@ -35,6 +36,7 @@ class HeteroObservationGraphModel(ARModel):
         self.args = args
         self.hidden_dim = args.hidden_dim
         self.num_heads = args.num_heads
+        self.mlp_blueprint_end = [args.hidden_dim] * (args.hidden_layers + 1)
         
         # Initialize network dictionaries
         self.observation_encoders = nn.ModuleDict()
@@ -48,19 +50,21 @@ class HeteroObservationGraphModel(ARModel):
         self.mesh_graph = None      # Will be set in setup_mesh
         self.m2o_graph = None       # Will be set during forward pass
         self.o2m_graph = None       # Will be set during forward pass
+
+        self.create_mesh_structures()
         
-        # Create mesh processing GNN
-        self.mesh_gnn = InteractionNet(
-            edge_index=None,  # Will be set during forward pass
-            input_dim=self.hidden_dim,
-            hidden_layers=args.num_layers,
-            update_edges=False
-        )
+        # # Create mesh processing GNN
+        # self.mesh_gnn = InteractionNet(
+        #     edge_index=self.mesh_graph.edge_indx,  
+        #     input_dim=self.hidden_dim,
+        #     hidden_layers=args.hidden_layers,
+        #     update_edges=False
+        # )
         
         # Feature combination layers
         self.mesh_feature_combiner = utils.make_mlp(
             [self.hidden_dim * len(args.observation_config)] + 
-            [self.hidden_dim] * args.num_layers
+            [self.hidden_dim] * args.hidden_layers
         )
         
         # Attention for feature combination
@@ -138,45 +142,50 @@ class HeteroObservationGraphModel(ARModel):
         
         # Create decoder networks
         self.observation_decoders = nn.ModuleDict()
-        
-        for obs_type, config in observation_config.items():
-            # Create encoder (input features -> hidden)
-            self.observation_encoders[obs_type] = nn.Sequential(
-                utils.make_mlp([config['dim'], self.hidden_dim * 2]),
-                nn.LayerNorm(self.hidden_dim * 2),
-                nn.ReLU(),
-                utils.make_mlp([self.hidden_dim * 2, self.hidden_dim])
-            )
-            
-            # Create embedder (processes encoded features)
-            self.observation_embedders[obs_type] = nn.Sequential(
-                utils.make_mlp([self.hidden_dim] + self.mlp_blueprint),
-                nn.LayerNorm(self.hidden_dim)
-            )
-            
-            # Create observation-to-mesh network
-            self.observation_to_mesh[obs_type] = GATConv(
-                in_channels=self.hidden_dim,
-                out_channels=self.hidden_dim,
-                heads=self.num_heads,
-                concat=False
-            )
-            
-            # Create mesh-to-observation network
-            self.mesh_to_observation[obs_type] = GATConv(
-                in_channels=self.hidden_dim,
-                out_channels=self.hidden_dim,  # Keep in hidden dim for decoder
-                heads=self.num_heads,
-                concat=False
-            )
-            
-            # Create decoder (hidden -> output features)
-            self.observation_decoders[obs_type] = nn.Sequential(
-                utils.make_mlp([self.hidden_dim, self.hidden_dim * 2]),
-                nn.LayerNorm(self.hidden_dim * 2),
-                nn.ReLU(),
-                utils.make_mlp([self.hidden_dim * 2, config['dim']])
-            )
+        obs_dim = 3 # TODO make sure haw to set up this
+        for obs_t in observation_config.keys():
+            for inst_name, inst_config in observation_config[obs_t].items():
+                obs_type = f'{obs_t}_{inst_name}'
+                print(inst_config)
+                input_dim = inst_config['input_dim']
+                target_dim = inst_config['target_dim']
+                # Create encoder (input features -> hidden)
+                self.observation_encoders[obs_type] = nn.Sequential(
+                    utils.make_mlp([input_dim, self.hidden_dim * 2]),
+                    nn.LayerNorm(self.hidden_dim * 2),
+                    nn.ReLU(),
+                    utils.make_mlp([self.hidden_dim * 2, self.hidden_dim])
+                )
+                
+                # Create embedder (processes encoded features)
+                self.observation_embedders[obs_type] = nn.Sequential(
+                    utils.make_mlp([self.hidden_dim] + self.mlp_blueprint_end),
+                    nn.LayerNorm(self.hidden_dim)
+                )
+                
+                # Create observation-to-mesh network
+                self.observation_to_mesh[obs_type] = GATConv(
+                    in_channels=self.hidden_dim,
+                    out_channels=self.hidden_dim,
+                    heads=self.num_heads,
+                    concat=False
+                )
+                
+                # Create mesh-to-observation network
+                self.mesh_to_observation[obs_type] = GATConv(
+                    in_channels=self.hidden_dim,
+                    out_channels=self.hidden_dim,  # Keep in hidden dim for decoder
+                    heads=self.num_heads,
+                    concat=False
+                )
+                
+                # Create decoder (hidden -> output features)
+                self.observation_decoders[obs_type] = nn.Sequential(
+                    utils.make_mlp([self.hidden_dim, self.hidden_dim * 2]),
+                    nn.LayerNorm(self.hidden_dim * 2),
+                    nn.ReLU(),
+                    utils.make_mlp([self.hidden_dim * 2, target_dim])
+                )
 
     def get_num_mesh(self) -> Tuple[int, int]:
         """
@@ -268,8 +277,9 @@ class HeteroObservationGraphModel(ARModel):
             self.mesh_structure = mesh_data
             self.mesh_graph = Data(
                 pos=torch.from_numpy(grid_coordinates).float(),
-                edge_index=torch.from_numpy(mesh_data['edge_index']).long(),
-                edge_attr=torch.from_numpy(mesh_data['edge_attr']).float() if 'edge_attr' in mesh_data else None
+                m2m_graphs = mesh_data['m2m_graphs'],
+                edge_index=mesh_data['m2m_graphs'][0].edge_index,
+                edge_attr=mesh_data['m2m_graphs']['edge_attr'] if 'edge_attr' in mesh_data else None
             )
             
         except FileNotFoundError as e:
@@ -307,23 +317,27 @@ class HeteroObservationGraphModel(ARModel):
         
         # Process each observation type and map to mesh
         mesh_features_list = []
-        for obs_type, (locations, values) in observations.items():
-            # Get the graph for this observation type
-            o2m_graph = obs_graphs[obs_type]['o2m']
-            
-            # Encode observation values
-            encoded_obs = self.observation_encoders[obs_type](values)
-            
-            # Embed encoded features
-            embedded_obs = self.observation_embedders[obs_type](encoded_obs)
-            
-            # Use observation graph to propagate features to mesh
-            mesh_features = self.observation_to_mesh[obs_type](
-                embedded_obs,
-                mesh_features,  # Now properly initialized for batch
-                edge_index=o2m_graph.edge_index
-            )
-            mesh_features_list.append(mesh_features)
+        for obs_type in observations.keys():
+            for inst_name in observations[obs_type].keys():
+                obs_type_str = f'{obs_type}_{inst_name}'
+                bin_data = observations[obs_type][inst_name]
+                # Get the graph for this observation type
+                o2m_graph = bin_data['o2m']
+                
+                # Encode observation values
+                values = bin_data["input_features_final"]
+                encoded_obs = hetero_model.observation_encoders[obs_type_str](values)
+                
+                # Embed encoded features
+                embedded_obs = hetero_model.observation_embedders[obs_type_str](encoded_obs)
+                
+                # Use observation graph to propagate features to mesh
+                mesh_features = hetero_model.observation_to_mesh[obs_type_str](
+                    embedded_obs,
+                    mesh_features,  # Now properly initialized for batch
+                    edge_index=o2m_graph['g2m_graph'].edge_index
+                )
+                mesh_features_list.append(mesh_features)
         
         # Combine features from all observation types on mesh
         mesh_features = self.combine_features(mesh_features_list)
