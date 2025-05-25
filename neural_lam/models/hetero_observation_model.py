@@ -164,7 +164,7 @@ class HeteroObservationGraphModel(ARModel):
                 )
                 
                 # Create observation-to-mesh network
-                self.observation_to_mesh[obs_type] = GATConv(
+                self.observation_to_mesh[obs_type] = GATCLonv(
                     in_channels=self.hidden_dim,
                     out_channels=self.hidden_dim,
                     heads=self.num_heads,
@@ -326,13 +326,13 @@ class HeteroObservationGraphModel(ARModel):
                 
                 # Encode observation values
                 values = bin_data["input_features_final"]
-                encoded_obs = hetero_model.observation_encoders[obs_type_str](values)
+                encoded_obs = self.observation_encoders[obs_type_str](values)
                 
                 # Embed encoded features
-                embedded_obs = hetero_model.observation_embedders[obs_type_str](encoded_obs)
+                embedded_obs = self.observation_embedders[obs_type_str](encoded_obs)
                 
                 # Use observation graph to propagate features to mesh
-                mesh_features = hetero_model.observation_to_mesh[obs_type_str](
+                mesh_features = self.observation_to_mesh[obs_type_str](
                     embedded_obs,
                     mesh_features,  # Now properly initialized for batch
                     edge_index=o2m_graph['g2m_graph'].edge_index

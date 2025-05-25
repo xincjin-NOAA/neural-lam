@@ -484,16 +484,16 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
             G_grid.add_node(i, pos=pos)
         return prepend_node_index_int(G_grid, 1000)
     
-    def _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args0):
+    def _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args0):
         """Create edges from grid to mesh nodes with observation-specific parameters."""
         # Get observation-specific parameters
         args = vars(args0)
         obs_type = args.get('obs_type', None)
         cutoff = args.get('cutoff', DM_SCALE)
         num_neighbors = args.get('num_neighbors', 3)
-        
-        for v in vm:
+        for v in mesh_nodes:
             v_pos = vm[v]["pos"]
+            mesh_idx = node_mapping[v]  # Get new mesh node index
             
             # Try radius-based neighbors first
             neigh_idxs = kdt_g.query_ball_point(v_pos, dm * cutoff)
@@ -504,15 +504,17 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
                 neigh_idxs = indices
             
             for i in neigh_idxs:
-                u = vg_list[i]
-                # Add edge from grid to mesh
-                G_g2m.add_edge(u, v)
+                u = grid_nodes[i]
+                grid_idx = node_mapping[u]  # Get new grid node index
+                
+                # Add edge from grid to mesh using new indices
+                G_g2m.add_edge(grid_idx, mesh_idx)
                 
                 # Calculate edge properties
-                u_pos = G_g2m.nodes[u]["pos"]
+                u_pos = G_g2m.nodes[grid_idx]["pos"]
                 d = _euclidean_distance(u_pos, v_pos)
-                G_g2m.edges[u, v]["len"] = d
-                G_g2m.edges[u, v]["vdiff"] = v_pos - u_pos
+                G_g2m.edges[grid_idx, mesh_idx]["len"] = d
+                G_g2m.edges[grid_idx, mesh_idx]["vdiff"] = v_pos - u_pos
                 
                 # Add observation-specific weight
                 if obs_type:
@@ -522,7 +524,7 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
                         weight = np.exp(-d / (dm * cutoff))
                     elif obs_type == 'wind':
                         weight = 1.0 / (1.0 + d)
-                    G_g2m.edges[u, v]["weight"] = weight
+                    G_g2m.edges[grid_idx, mesh_idx]["weight"] = weight
         
         return G_g2m
     
@@ -545,13 +547,23 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         # 4. Add mesh nodes to grid
         G_grid.add_nodes_from(all_mesh_nodes)
         
-        # 5. Create g2m graph with sorted nodes
+        # 5. Create g2m graph with sorted nodes and reindex
         G_g2m = netwx.Graph()
-        G_g2m.add_nodes_from(sorted(G_grid.nodes(data=True)))
+        
+        # Create a mapping for reindexing
+        grid_nodes = vg_list  # Original grid node indices
+        mesh_nodes = list(vm)  # Original mesh node indices
+        node_mapping = {node: idx for idx, node in enumerate(grid_nodes + mesh_nodes)}
+        
+        # Add nodes with remapped indices and preserve data
+        for node in G_grid.nodes(data=True):
+            new_idx = node_mapping[node[0]]
+            G_g2m.add_node(new_idx, **node[1])
+        
         G_g2m = netwx.DiGraph(G_g2m)
-
-        # 6. Add edges
-        G_g2m = _create_g2m_edges(G_g2m, vm, vg_list, kdt_g, dm, args)
+        
+        # 6. Add edges with remapped indices
+        G_g2m = _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args)
 
         # 7. Convert to PyTorch Geometric
         pyg_g2m = from_networkx(G_g2m)
