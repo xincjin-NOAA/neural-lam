@@ -571,7 +571,17 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         G_g2m = _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args)
 
         # 7. Convert to PyTorch Geometric
+        # Verify all indices are within valid range
+        num_nodes = G_g2m.number_of_nodes()
+        for u, v in G_g2m.edges():
+            if u >= num_nodes or v >= num_nodes:
+                raise ValueError(f"Invalid edge indices: ({u}, {v}) for graph with {num_nodes} nodes")
+        
+        # Convert to PyTorch Geometric
         pyg_g2m = from_networkx(G_g2m)
+        
+        # Ensure edge_index is correct type
+        pyg_g2m.edge_index = pyg_g2m.edge_index.long()
         
         # 8. Optional plotting
         if args.plot:
