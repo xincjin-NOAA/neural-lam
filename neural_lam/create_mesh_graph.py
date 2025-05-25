@@ -482,50 +482,7 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
             G_grid.add_node(i, pos=pos)
         return G_grid
     
-    def _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args0):
-        """Create edges from grid to mesh nodes with observation-specific parameters."""
-        # Get observation-specific parameters
-        args = vars(args0)
-        obs_type = args.get('obs_type', None)
-        cutoff = args.get('cutoff', DM_SCALE)
-        num_neighbors = args.get('num_neighbors', 3)
-        for v in mesh_nodes:
-            v_pos = vm[v]["pos"]
-            mesh_idx = node_mapping[v]  # Get new mesh node index
-            
-            # Try radius-based neighbors first
-            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * cutoff)
-            
-            # Fallback to KNN if no neighbors found
-            if not neigh_idxs:
-                distances, indices = kdt_g.query(v_pos, k=num_neighbors)
-                neigh_idxs = indices
-            
-            for i in neigh_idxs:
-                u = grid_nodes[i]
-                grid_idx = node_mapping[u]  # Get new grid node index
-                
-                # Add edge from grid to mesh using new indices
-                G_g2m.add_edge(grid_idx, mesh_idx)
-                
-                # Calculate edge properties
-                u_pos = G_g2m.nodes[grid_idx]["pos"]
-                d = _euclidean_distance(u_pos, v_pos)
-                G_g2m.edges[grid_idx, mesh_idx]["len"] = d
-                G_g2m.edges[grid_idx, mesh_idx]["vdiff"] = v_pos - u_pos
-                
-                # Add observation-specific weight
-                if obs_type:
-                    # Example: Different weights for different observation types
-                    weight = 1.0
-                    if obs_type == 'temperature':
-                        weight = np.exp(-d / (dm * cutoff))
-                    elif obs_type == 'wind':
-                        weight = 1.0 / (1.0 + d)
-                    G_g2m.edges[grid_idx, mesh_idx]["weight"] = weight
-        
-        return G_g2m
-    
+
     try:
         args_dict = vars(args)
         # 1. Get mesh nodes and their positions
@@ -542,56 +499,50 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         vg_coords = np.array([G_grid.nodes[n]['pos'] for n in vg_list])
         kdt_g = KDTree(vg_coords)
         
-        # 4. Create g2m graph with remapped indices
-        G_g2m = netwx.Graph()
+        # 4. Create edge connections between grid and mesh
+        grid_to_mesh_edges = []
+        edge_weights = []
+        edge_vdiffs = []
         
-        # Create a mapping for reindexing
-        grid_nodes = vg_list  # Original grid node indices
-        mesh_nodes = list(vm)  # Original mesh node indices
-        
-        # Add grid nodes with consecutive indices starting from 0
-        for i, node in enumerate(grid_nodes):
-            G_g2m.add_node(i, **G_grid.nodes[node])
+        # Process each mesh node
+        for mesh_idx, v in enumerate(vm):
+            v_pos = vm[v]["pos"]
             
-        # Add mesh nodes with consecutive indices after grid nodes
-        mesh_offset = len(grid_nodes)
-        for i, node in enumerate(mesh_nodes):
-            G_g2m.add_node(mesh_offset + i, **vm[node])
+            # Try radius-based neighbors first
+            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * args.get('cutoff', DM_SCALE))
             
-        # Create mapping from original indices to new consecutive indices
-        node_mapping = {}
-        for i, node in enumerate(grid_nodes):
-            node_mapping[node] = i
-        for i, node in enumerate(mesh_nodes):
-            node_mapping[node] = mesh_offset + i
+            # Fallback to KNN if no neighbors found
+            if not neigh_idxs:
+                distances, indices = kdt_g.query(v_pos, k=args.get('num_neighbors', 3))
+                neigh_idxs = indices
+            
+            for i in neigh_idxs:
+                grid_idx = i  # Grid indices already start from 0
+                
+                # Add connection
+                grid_to_mesh_edges.append((grid_idx, mesh_idx))
+                
+                # Calculate edge properties
+                grid_pos = G_grid.nodes[grid_nodes[i]]["pos"]
+                d = _euclidean_distance(grid_pos, v_pos)
+                edge_weights.append(d)
+                edge_vdiffs.append(v_pos - grid_pos)
         
-        G_g2m = netwx.DiGraph(G_g2m)
+        # Convert to PyTorch tensors
+        edge_index = torch.tensor(grid_to_mesh_edges, dtype=torch.long).t()
+        edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+        edge_vdiffs = torch.tensor(edge_vdiffs, dtype=torch.float)
         
-        # 6. Add edges with remapped indices
-        G_g2m = _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args)
-
-        # 7. Convert to PyTorch Geometric
-        # Verify all indices are within valid range
-        num_nodes = G_g2m.number_of_nodes()
-        for u, v in G_g2m.edges():
-            if u >= num_nodes or v >= num_nodes:
-                raise ValueError(f"Invalid edge indices: ({u}, {v}) for graph with {num_nodes} nodes")
-        
-        # Convert to PyTorch Geometric
-        pyg_g2m = from_networkx(G_g2m)
-        
-        # Add node type information
-        num_grid = len(grid_nodes)
-        num_mesh = len(mesh_nodes)
-        node_type = torch.zeros(num_grid + num_mesh, dtype=torch.long)
-        node_type[num_grid:] = 1  # 0 for grid nodes, 1 for mesh nodes
-        pyg_g2m.node_type = node_type
-        
-        # Add number of each type
-        pyg_g2m.num_grid_nodes = num_grid
-        pyg_g2m.num_mesh_nodes = num_mesh
-        # Ensure edge_index is correct type
-        pyg_g2m.edge_index = pyg_g2m.edge_index.long()
+        # Create PyG graph with separate grid and mesh nodes
+        pyg_g2m = Data(
+            grid_pos=torch.tensor([G_grid.nodes[n]['pos'] for n in vg_list], dtype=torch.float),
+            mesh_pos=torch.tensor([vm[n]['pos'] for n in vm], dtype=torch.float),
+            edge_index=edge_index,
+            edge_weights=edge_weights,
+            edge_vdiffs=edge_vdiffs,
+            num_grid_nodes=len(vg_list),
+            num_mesh_nodes=len(vm)
+        )
         
         # 8. Optional plotting
         if args.plot:

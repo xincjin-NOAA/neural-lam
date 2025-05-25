@@ -114,10 +114,15 @@ class HeteroObservationGraphModel(ARModel):
         # Shape: [batch_size, num_mesh_nodes, hidden_dim]
         mesh_features = torch.zeros(
             batch_size,
-            self.mesh_graph.num_mesh_nodes,  # Number of mesh nodes
-            self.hidden_dim,               # Feature dimension
-            device=device                  # Same device as input
+            self.mesh_graph.num_mesh_nodes,  # Using num_mesh_nodes directly
+            self.hidden_dim,
+            device=device
         )
+        
+        # Optionally, we could initialize with mesh node positions
+        # mesh_pos = self.mesh_graph.mesh_pos  # [M, 2]
+        # mesh_pos_expanded = mesh_pos.unsqueeze(0).expand(batch_size, -1, -1)  # [B, M, 2]
+        # mesh_features[..., :2] = mesh_pos_expanded  # Initialize first 2 dims with positions
         
         return mesh_features
 
@@ -164,8 +169,8 @@ class HeteroObservationGraphModel(ARModel):
                 )
                 
                 # Create observation-to-mesh network
-                self.observation_to_mesh[obs_type] = GATCLonv(
-                    in_channels=self.hidden_dim,
+                self.observation_to_mesh[obs_type] = GATConv(
+                    in_channels=(self.hidden_dim, self.hidden_dim),  # (grid_dim, mesh_dim)
                     out_channels=self.hidden_dim,
                     heads=self.num_heads,
                     concat=False
@@ -173,8 +178,8 @@ class HeteroObservationGraphModel(ARModel):
                 
                 # Create mesh-to-observation network
                 self.mesh_to_observation[obs_type] = GATConv(
-                    in_channels=self.hidden_dim,
-                    out_channels=self.hidden_dim,  # Keep in hidden dim for decoder
+                    in_channels=(self.hidden_dim, self.hidden_dim),  # (mesh_dim, grid_dim)
+                    out_channels=self.hidden_dim,
                     heads=self.num_heads,
                     concat=False
                 )
@@ -333,8 +338,7 @@ class HeteroObservationGraphModel(ARModel):
                 
                 # Use observation graph to propagate features to mesh
                 mesh_features = self.observation_to_mesh[obs_type_str](
-                    embedded_obs,
-                    mesh_features,  # Now properly initialized for batch
+                    (embedded_obs, mesh_features),  # (grid_features, mesh_features)
                     edge_index=o2m_graph['g2m_graph'].edge_index
                 )
                 mesh_features_list.append(mesh_features)
@@ -369,8 +373,7 @@ class HeteroObservationGraphModel(ARModel):
             
             # Propagate features back to observations
             obs_features = self.mesh_to_observation[obs_type](
-                mesh_features,
-                self.observation_embedders[obs_type](encoded_obs),  # Re-embed encoded for skip
+                (mesh_features, self.observation_embedders[obs_type](encoded_obs)),  # (mesh_features, grid_features)
                 edge_index=m2o_graph.edge_index
             )
             
