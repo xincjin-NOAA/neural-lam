@@ -580,6 +580,16 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         # Convert to PyTorch Geometric
         pyg_g2m = from_networkx(G_g2m)
         
+        # Add node type information
+        num_grid = len(grid_nodes)
+        num_mesh = len(mesh_nodes)
+        node_type = torch.zeros(num_grid + num_mesh, dtype=torch.long)
+        node_type[num_grid:] = 1  # 0 for grid nodes, 1 for mesh nodes
+        pyg_g2m.node_type = node_type
+        
+        # Add number of each type
+        pyg_g2m.num_grid_nodes = num_grid
+        pyg_g2m.num_mesh_nodes = num_mesh
         # Ensure edge_index is correct type
         pyg_g2m.edge_index = pyg_g2m.edge_index.long()
         

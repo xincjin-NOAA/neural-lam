@@ -89,7 +89,7 @@ class HeteroObservationGraphModel(ARModel):
         Returns:
             Tensor of shape [2, E*B] containing batched edge indices
         """
-        num_mesh_nodes = self.mesh_graph.pos.shape[0]
+        num_mesh_nodes = self.mesh_graph.num_mesh_nodes
         batch_mesh_edges = []
         
         for b in range(batch_size):
@@ -114,7 +114,7 @@ class HeteroObservationGraphModel(ARModel):
         # Shape: [batch_size, num_mesh_nodes, hidden_dim]
         mesh_features = torch.zeros(
             batch_size,
-            self.mesh_graph.pos.shape[0],  # Number of mesh nodes
+            self.mesh_graph.num_mesh_nodes,  # Number of mesh nodes
             self.hidden_dim,               # Feature dimension
             device=device                  # Same device as input
         )
