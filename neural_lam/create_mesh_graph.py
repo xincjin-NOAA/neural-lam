@@ -478,11 +478,9 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
     def _create_base_grid(points):
         """Create base grid graph from coordinates."""
         G_grid = netwx.Graph()
-        
-        # Add nodes with positions
         for i, pos in enumerate(points):
             G_grid.add_node(i, pos=pos)
-        return prepend_node_index_int(G_grid, 1000)
+        return G_grid
     
     def _create_g2m_edges(G_g2m, vm, grid_nodes, mesh_nodes, node_mapping, kdt_g, dm, args0):
         """Create edges from grid to mesh nodes with observation-specific parameters."""
@@ -544,21 +542,28 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         vg_coords = np.array([G_grid.nodes[n]['pos'] for n in vg_list])
         kdt_g = KDTree(vg_coords)
         
-        # 4. Add mesh nodes to grid
-        G_grid.add_nodes_from(all_mesh_nodes)
-        
-        # 5. Create g2m graph with sorted nodes and reindex
+        # 4. Create g2m graph with remapped indices
         G_g2m = netwx.Graph()
         
         # Create a mapping for reindexing
         grid_nodes = vg_list  # Original grid node indices
         mesh_nodes = list(vm)  # Original mesh node indices
-        node_mapping = {node: idx for idx, node in enumerate(grid_nodes + mesh_nodes)}
         
-        # Add nodes with remapped indices and preserve data
-        for node in G_grid.nodes(data=True):
-            new_idx = node_mapping[node[0]]
-            G_g2m.add_node(new_idx, **node[1])
+        # Add grid nodes with consecutive indices starting from 0
+        for i, node in enumerate(grid_nodes):
+            G_g2m.add_node(i, **G_grid.nodes[node])
+            
+        # Add mesh nodes with consecutive indices after grid nodes
+        mesh_offset = len(grid_nodes)
+        for i, node in enumerate(mesh_nodes):
+            G_g2m.add_node(mesh_offset + i, **vm[node])
+            
+        # Create mapping from original indices to new consecutive indices
+        node_mapping = {}
+        for i, node in enumerate(grid_nodes):
+            node_mapping[node] = i
+        for i, node in enumerate(mesh_nodes):
+            node_mapping[node] = mesh_offset + i
         
         G_g2m = netwx.DiGraph(G_g2m)
         
