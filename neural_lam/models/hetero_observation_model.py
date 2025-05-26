@@ -54,6 +54,7 @@ class HeteroObservationGraphModel(ARModel):
         self.create_mesh_structures()
         
         # Create mesh processing GNN
+        # Note: edge_index will be updated during forward pass for each batch
         self.mesh_gnn = InteractionNet(
             edge_index=self.mesh_graph.m2m_graphs[0].edge_index,  
             input_dim=self.hidden_dim,
@@ -355,13 +356,9 @@ class HeteroObservationGraphModel(ARModel):
         batch_mesh_edges = self.create_batch_mesh_edges(batch_size, device)
         
         # Process features on mesh using InteractionNet
-        # Process features on mesh using InteractionNet
-        # Note: mesh_features are both senders and receivers in mesh-to-mesh communication
-        mesh_features_processed = self.mesh_gnn(
-            mesh_features_flat,     # send_rep: Mesh nodes as senders
-            mesh_features_flat,     # rec_rep: Same nodes as receivers
-            None                   # edge_rep: No edge features for now
-        )
+        # Note: Need to update edge_index for the current batch
+        self.mesh_gnn.edge_index = batch_mesh_edges
+        mesh_features_processed = self.mesh_gnn(mesh_features_flat)
         
         # Reshape back to batched form
         mesh_features = mesh_features_processed.reshape(batch_size, -1, self.hidden_dim)
