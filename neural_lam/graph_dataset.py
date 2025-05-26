@@ -87,7 +87,8 @@ class GraphDataset(Dataset):
                         coords,
                         self.mesh_structure['G_bottom_mesh'],
                         self.mesh_structure['all_mesh_nodes'],
-                        self.args
+                        self.args,
+                        conn='m2g'
                     )
                      
         return bin_data

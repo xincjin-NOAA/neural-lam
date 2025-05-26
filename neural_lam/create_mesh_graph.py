@@ -426,7 +426,7 @@ def print_pos(vm):
     
 def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'):
     """
-    Create Grid-to-Mesh (g2m) graph structure for heterogeneous observations.
+    Create Grid-to-Mesh (g2m) or Mesh-to-Grid (m2g) graph structure for heterogeneous observations.
     
     Args:
         coords: Array of shape [N, 2] containing [x, y] coordinates
@@ -440,10 +440,11 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
             - plot: Whether to plot the graph
             - obs_type: Optional, observation type for type-specific parameters
             - include_boundary_mask: Optional, whether to include boundary mask (default: False)
+        conn: Connection type, either 'g2m' (grid-to-mesh) or 'm2g' (mesh-to-grid)
     
     Returns:
         dict: Contains:
-            - g2m_graph: PyTorch Geometric graph for grid-to-mesh
+            - graph: PyTorch Geometric graph for grid-to-mesh or mesh-to-grid
             - grid_graph: Base grid graph
             - mesh_distance: Distance between mesh nodes
             - edge_weights: Optional weights for heterogeneous observations
@@ -545,16 +546,31 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
             num_mesh_nodes=len(vm)
         )
         
-        # 8. Optional plotting
-        # if args.plot:
-        #     plot_graph(pyg_g2m, title="Grid-to-mesh")
-        #     plt.show()
-        
+        # Create the appropriate graph based on connection type
+        if conn == 'g2m':
+            # Grid-to-mesh: Use edges as is
+            graph = pyg_g2m
+        elif conn == 'm2g':
+            # Mesh-to-grid: Flip the edge indices
+            edge_index = pyg_g2m.edge_index
+            m2g_edge_index = torch.stack([edge_index[1], edge_index[0]], dim=0)
+            
+            # Create new graph with flipped edges but keep other attributes
+            graph = Data(
+                edge_index=m2g_edge_index,
+                grid_pos=pyg_g2m.grid_pos,
+                mesh_pos=pyg_g2m.mesh_pos,
+                edge_weights=pyg_g2m.edge_weights,
+                edge_vdiffs=pyg_g2m.edge_vdiffs
+            )
+        else:
+            raise ValueError(f"Unknown connection type: {conn}. Must be 'g2m' or 'm2g'")
+            
         # Create result dictionary
         result = {
-            'g2m_graph': pyg_g2m,
+            'graph': graph,
             'grid_graph': G_grid,
-            'mesh_distance': dm
+            'mesh_distance': dm,
         }
         
         # Add boundary mask if requested
