@@ -53,13 +53,13 @@ class HeteroObservationGraphModel(ARModel):
 
         self.create_mesh_structures()
         
-        # # Create mesh processing GNN
-        # self.mesh_gnn = InteractionNet(
-        #     edge_index=self.mesh_graph.edge_indx,  
-        #     input_dim=self.hidden_dim,
-        #     hidden_layers=args.hidden_layers,
-        #     update_edges=False
-        # )
+        # Create mesh processing GNN
+        self.mesh_gnn = InteractionNet(
+            edge_index=self.mesh_graph.m2m_graphs[0].edge_index,  
+            input_dim=self.hidden_dim,
+            hidden_layers=args.hidden_layers,
+            update_edges=False
+        )
         
         # Feature combination layers
         self.mesh_feature_combiner = utils.make_mlp(
@@ -89,7 +89,7 @@ class HeteroObservationGraphModel(ARModel):
         Returns:
             Tensor of shape [2, E*B] containing batched edge indices
         """
-        num_mesh_nodes = self.mesh_graph.num_mesh_nodes
+        num_mesh_nodes = self.get_num_mesh()
         batch_mesh_edges = []
         
         for b in range(batch_size):
@@ -114,7 +114,7 @@ class HeteroObservationGraphModel(ARModel):
         # Shape: [batch_size, num_mesh_nodes, hidden_dim]
         mesh_features = torch.zeros(
             batch_size,
-            self.mesh_graph.num_mesh_nodes,  # Using num_mesh_nodes directly
+            self.mesh_graph.m2m_graphs[0].pos.shape[0],  # Using num_mesh_nodes directly
             self.hidden_dim,
             device=device
         )
@@ -207,7 +207,7 @@ class HeteroObservationGraphModel(ARModel):
         if self.mesh_graph is None:
             raise RuntimeError("Mesh graph must be initialized before calling get_num_mesh")
             
-        return self.mesh_graph.pos.shape[0], 0  # No nodes are ignored in our implementation
+        return self.mesh_graph.m2m_graphs[0].pos.shape[0]  # No nodes are ignored in our implementation
         
     def build_observation_graphs(self, observation_locations: Dict[str, torch.Tensor]):
         """
@@ -240,15 +240,17 @@ class HeteroObservationGraphModel(ARModel):
         """
         # Stack features for attention
         features = torch.stack(feature_list, dim=0)  # (num_types, B, N, hidden_dim)
+
+
+        return torch.mean(features, dim=0) # (num_mesh, hidden_dim]
+        # # Apply attention
+        # combined, _ = self.attention_layer(
+        #     features[0],  # query from first type
+        #     features,     # keys from all types
+        #     features,     # values from all types
+        # )
         
-        # Apply attention
-        combined, _ = self.attention_layer(
-            features[0],  # query from first type
-            features,     # keys from all types
-            features,     # values from all types
-        )
-        
-        return combined
+        # return combined
 
     def create_mesh_structures(self) -> None:
         """

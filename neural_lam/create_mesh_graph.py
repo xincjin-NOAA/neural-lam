@@ -10,6 +10,7 @@ import numpy as np
 import scipy.spatial
 import torch
 import torch_geometric as pyg
+from torch_geometric.data import Data
 from torch_geometric.utils.convert import from_networkx
 
 # Local
@@ -509,11 +510,11 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
             v_pos = vm[v]["pos"]
             
             # Try radius-based neighbors first
-            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * args.get('cutoff', DM_SCALE))
+            neigh_idxs = kdt_g.query_ball_point(v_pos, dm * args.cutoff_factor)
             
             # Fallback to KNN if no neighbors found
             if not neigh_idxs:
-                distances, indices = kdt_g.query(v_pos, k=args.get('num_neighbors', 3))
+                distances, indices = kdt_g.query(v_pos, k=args.num_neighbors)
                 neigh_idxs = indices
             
             for i in neigh_idxs:
@@ -523,7 +524,7 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
                 grid_to_mesh_edges.append((grid_idx, mesh_idx))
                 
                 # Calculate edge properties
-                grid_pos = G_grid.nodes[grid_nodes[i]]["pos"]
+                grid_pos = G_grid.nodes[i]["pos"]
                 d = _euclidean_distance(grid_pos, v_pos)
                 edge_weights.append(d)
                 edge_vdiffs.append(v_pos - grid_pos)
@@ -545,9 +546,9 @@ def create_obs_conn_mesh(coords, G_bottom_mesh, all_mesh_nodes, args, conn='g2m'
         )
         
         # 8. Optional plotting
-        if args.plot:
-            plot_graph(pyg_g2m, title="Grid-to-mesh")
-            plt.show()
+        # if args.plot:
+        #     plot_graph(pyg_g2m, title="Grid-to-mesh")
+        #     plt.show()
         
         # Create result dictionary
         result = {
