@@ -355,10 +355,12 @@ class HeteroObservationGraphModel(ARModel):
         batch_mesh_edges = self.create_batch_mesh_edges(batch_size, device)
         
         # Process features on mesh using InteractionNet
+        # Process features on mesh using InteractionNet
+        # Note: mesh_features are both senders and receivers in mesh-to-mesh communication
         mesh_features_processed = self.mesh_gnn(
-            x=mesh_features_flat,
-            edge_index=batch_mesh_edges,
-            edge_attr=None  # No edge features for now
+            mesh_features_flat,     # send_rep: Mesh nodes as senders
+            mesh_features_flat,     # rec_rep: Same nodes as receivers
+            None                   # edge_rep: No edge features for now
         )
         
         # Reshape back to batched form
@@ -366,21 +368,31 @@ class HeteroObservationGraphModel(ARModel):
         
         # Map processed features back to observations
         predictions = {}
-        for obs_type, (locations, values) in observations.items():
-            # Get the graph for this observation type
-            m2o_graph = obs_graphs[obs_type]['m2o']
-            
-            # Get encoded features for skip connection
-            encoded_obs = self.observation_encoders[obs_type](values)
-            
-            # Propagate features back to observations
-            obs_features = self.mesh_to_observation[obs_type](
-                (mesh_features, self.observation_embedders[obs_type](encoded_obs)),  # (mesh_features, grid_features)
-                edge_index=m2o_graph.edge_index
-            )
-            
-            # Decode final predictions
-            predictions[obs_type] = self.observation_decoders[obs_type](obs_features)
+        for obs_type in observations:
+            predictions[obs_type] = {}
+            for inst_name in observations[obs_type]:
+                obs_type_str = f'{obs_type}_{inst_name}'
+                bin_data = observations[obs_type][inst_name]
+                
+                # Initialize observation features with zeros
+                num_obs = bin_data['o2m']['g2m_graph'].grid_pos.shape[0]
+                obs_features = torch.zeros(
+                    batch_size, num_obs, self.hidden_dim,
+                    device=mesh_features.device
+                )
+                
+                # Propagate features from mesh to observations using reversed edges
+                # Flip edge indices since we're going mesh->grid instead of grid->mesh
+                g2m_edges = bin_data['o2m']['g2m_graph'].edge_index
+                m2g_edges = torch.stack([g2m_edges[1], g2m_edges[0]], dim=0)
+                
+                obs_features = self.mesh_to_observation[obs_type_str](
+                    (mesh_features, obs_features),  # (mesh_features, grid_features)
+                    edge_index=m2g_edges
+                )
+                
+                # Decode predictions from mesh-derived features
+                predictions[obs_type][inst_name] = self.observation_decoders[obs_type_str](obs_features)
         
         return predictions
 
