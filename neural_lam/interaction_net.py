@@ -62,7 +62,11 @@ class InteractionNet(pyg.nn.MessagePassing):
         self.register_buffer("edge_index", edge_index, persistent=False)
 
         # Create MLPs
-        edge_mlp_recipe = [3 * input_dim] + [hidden_dim] * (hidden_layers + 1)
+        # Edge MLP input: [edge_attr (optional), x_j, x_i]
+        edge_mlp_input_dim = 2 * input_dim if not update_edges else 3 * input_dim
+        edge_mlp_recipe = [edge_mlp_input_dim] + [hidden_dim] * (hidden_layers + 1)
+        
+        # Aggregation MLP input: [rec_rep, edge_rep_aggr]
         aggr_mlp_recipe = [2 * input_dim] + [hidden_dim] * (hidden_layers + 1)
 
         if edge_chunk_sizes is None:
@@ -117,8 +121,18 @@ class InteractionNet(pyg.nn.MessagePassing):
     def message(self, x_j, x_i, edge_attr):
         """
         Compute messages from node j to node i.
+        
+        Args:
+            x_j: Features of source nodes
+            x_i: Features of target nodes
+            edge_attr: Edge features (can be None)
         """
-        return self.edge_mlp(torch.cat((edge_attr, x_j, x_i), dim=-1))
+        if edge_attr is None:
+            # If no edge features, just concatenate node features
+            return self.edge_mlp(torch.cat((x_j, x_i), dim=-1))
+        else:
+            # If edge features exist, concatenate all
+            return self.edge_mlp(torch.cat((edge_attr, x_j, x_i), dim=-1))
 
     # pylint: disable-next=signature-differs
     def aggregate(self, inputs, index, ptr, dim_size):

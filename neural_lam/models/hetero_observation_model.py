@@ -356,9 +356,13 @@ class HeteroObservationGraphModel(ARModel):
         batch_mesh_edges = self.create_batch_mesh_edges(batch_size, device)
         
         # Process features on mesh using InteractionNet
-        # Note: Need to update edge_index for the current batch
+        # Note: For mesh-to-mesh communication, same features are used as both senders and receivers
         self.mesh_gnn.edge_index = batch_mesh_edges
-        mesh_features_processed = self.mesh_gnn(mesh_features_flat)
+        mesh_features_processed = self.mesh_gnn(
+            send_rep=mesh_features_flat,  # Sender node features
+            rec_rep=mesh_features_flat,   # Receiver node features (same as sender)
+            edge_rep=None                 # No edge features since update_edges=False
+        )
         
         # Reshape back to batched form
         mesh_features = mesh_features_processed.reshape(batch_size, -1, self.hidden_dim)
