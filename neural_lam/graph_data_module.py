@@ -75,13 +75,13 @@ class WeatherDataModule(pl.LightningDataModule):
             collate_fn=collate_weather_batch
         )
     
-    def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=False,
-            num_workers=self.args.num_workers if hasattr(self.args, 'num_workers') else 4,
-            persistent_workers=True,
-            pin_memory=True,
-            collate_fn=collate_weather_batch
-        )
+    # def val_dataloader(self):
+    #     return DataLoader(
+    #         self.val_dataset,
+    #         batch_size=self.args.batch_size,
+    #         shuffle=False,
+    #         num_workers=self.args.num_workers if hasattr(self.args, 'num_workers') else 4,
+    #         persistent_workers=True,
+    #         pin_memory=True,
+    #         collate_fn=collate_weather_batch
+    #     )

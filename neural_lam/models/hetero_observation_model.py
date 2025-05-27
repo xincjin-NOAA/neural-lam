@@ -148,7 +148,7 @@ class HeteroObservationGraphModel(ARModel):
         
         # Create decoder networks
         self.observation_decoders = nn.ModuleDict()
-        obs_dim = 3 # TODO make sure haw to set up this
+
         for obs_t in observation_config.keys():
             for inst_name, inst_config in observation_config[obs_t].items():
                 obs_type = f'{obs_t}_{inst_name}'
@@ -242,7 +242,6 @@ class HeteroObservationGraphModel(ARModel):
         # Stack features for attention
         features = torch.stack(feature_list, dim=0)  # (num_types, B, N, hidden_dim)
 
-
         return torch.mean(features, dim=0) # (num_mesh, hidden_dim]
         # # Apply attention
         # combined, _ = self.attention_layer(
@@ -313,12 +312,14 @@ class HeteroObservationGraphModel(ARModel):
             Dictionary mapping observation types to their predicted values
                 {'obs_type': predicted_values [B,N,D], ...}
         """
-        observations = batch_data['observations']
-        obs_graphs = batch_data['obs_graphs']
-        
+
+        # assume batch size as 1
+        observations = batch_data
+
         # Get batch info
-        batch_size = next(iter(observations.values()))[0].shape[0]
-        device = next(iter(observations.values()))[0].device
+        batch_size = 1  # next(iter(observations.values()))[0].shape[0]
+        device = observations['satellite']['atms']['input_features_final'][0].device
+        # next(iter(observations.values()))[0].device
         
         # Initialize mesh features for the batch
         mesh_features = self.initialize_mesh_features(batch_size, device)
@@ -331,42 +332,49 @@ class HeteroObservationGraphModel(ARModel):
                 bin_data = observations[obs_type][inst_name]
                 # Get the graph for this observation type
                 o2m_graph = bin_data['o2m']
-                
+                print(o2m_graph.keys())
+
                 # Encode observation values
                 values = bin_data["input_features_final"]
                 encoded_obs = self.observation_encoders[obs_type_str](values)
-                
+
                 # Embed encoded features
                 embedded_obs = self.observation_embedders[obs_type_str](encoded_obs)
-                
+                print(o2m_graph["graph"].edge_index.shape)
+                print(embedded_obs.shape)
+                print("embedded_obs shape:", embedded_obs.shape)
+                print("mesh_features shape:", mesh_features.shape)
+                print("edge_index max values:",
+                      o2m_graph["graph"].edge_index[0].max().item(),
+                      o2m_graph["graph"].edge_index[1].max().item())
+
                 # Use observation graph to propagate features to mesh
                 mesh_features = self.observation_to_mesh[obs_type_str](
-                    (embedded_obs, mesh_features),  # (grid_features, mesh_features)
-                    edge_index=o2m_graph['g2m_graph'].edge_index
+                    (embedded_obs, mesh_features),
+                    edge_index=o2m_graph["graph"].edge_index
                 )
                 mesh_features_list.append(mesh_features)
-        
+
         # Combine features from all observation types on mesh
         mesh_features = self.combine_features(mesh_features_list)
-        
+
         # Process on mesh using InteractionNet
         mesh_features_flat = mesh_features.reshape(-1, mesh_features.shape[-1])  # [B*M, D]
-        
+
         # Create batched mesh edges
         batch_mesh_edges = self.create_batch_mesh_edges(batch_size, device)
-        
-        # Process features on mesh using InteractionNet
-        # Note: For mesh-to-mesh communication, same features are used as both senders and receivers
+
         self.mesh_gnn.edge_index = batch_mesh_edges
+        # Process features on mesh using InteractionNet
         mesh_features_processed = self.mesh_gnn(
-            send_rep=mesh_features_flat,  # Sender node features
-            rec_rep=mesh_features_flat,   # Receiver node features (same as sender)
-            edge_rep=None                 # No edge features since update_edges=False
+            mesh_features_flat,
+            mesh_features_flat,
+            None  # No edge features for now
         )
-        
+
         # Reshape back to batched form
-        mesh_features = mesh_features_processed.reshape(batch_size, -1, self.hidden_dim)
-        
+        mesh_features = mesh_features_flat.reshape(batch_size, -1, self.hidden_dim)
+
         # Map processed features back to observations
         predictions = {}
         for obs_type in observations:
@@ -374,27 +382,31 @@ class HeteroObservationGraphModel(ARModel):
             for inst_name in observations[obs_type]:
                 obs_type_str = f'{obs_type}_{inst_name}'
                 bin_data = observations[obs_type][inst_name]
-                
+
                 # Initialize observation features with zeros
-                num_obs = bin_data['o2m']['g2m_graph'].grid_pos.shape[0]
+                m2o_graph = bin_data['m2o']
+                num_obs = m2o_graph['graph'].grid_pos.shape[0]
                 obs_features = torch.zeros(
                     batch_size, num_obs, self.hidden_dim,
                     device=mesh_features.device
                 )
-                
+
                 # Propagate features from mesh to observations using reversed edges
                 # Flip edge indices since we're going mesh->grid instead of grid->mesh
-                g2m_edges = bin_data['o2m']['g2m_graph'].edge_index
-                m2g_edges = torch.stack([g2m_edges[1], g2m_edges[0]], dim=0)
-                
+                m2g_edges = m2o_graph['graph'].edge_index
+                print(m2o_graph["graph"].edge_index.shape)
+                print(embedded_obs.shape)
+                print("embedded_obs shape:", obs_features.shape)
+                print("mesh_features shape:", mesh_features.shape)
+                print("edge_index max values:",
+                      m2o_graph["graph"].edge_index[0].max().item(),
+                      m2o_graph["graph"].edge_index[1].max().item())
                 obs_features = self.mesh_to_observation[obs_type_str](
-                    (mesh_features, obs_features),  # (mesh_features, grid_features)
+                    (mesh_features[0], obs_features[0]),  # (mesh_features, grid_features)
                     edge_index=m2g_edges
                 )
-                
+
                 # Decode predictions from mesh-derived features
                 predictions[obs_type][inst_name] = self.observation_decoders[obs_type_str](obs_features)
-        
-        return predictions
 
-  
+        return predictions

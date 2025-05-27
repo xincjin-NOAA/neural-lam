@@ -106,7 +106,6 @@ def main(override_args=None):
     
     # Set graph structures from dataset
     datamodule.setup()
-    model.set_graph_structures(datamodule.dataset)
     
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
