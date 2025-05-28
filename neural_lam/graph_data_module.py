@@ -26,7 +26,8 @@ def collate_weather_batch(batch: List[Dict]) -> Dict:
             - m2o: Dictionary with graph data for decoding
     """
     batched = {}
-    
+
+    included_features = ['input_features_final', 'target_features_final','input_metadata', 'input_metadata', 'o2m', 'm2o']
     # Get first item to determine structure
     first_item = batch[0]
     
@@ -40,18 +41,15 @@ def collate_weather_batch(batch: List[Dict]) -> Dict:
             inst_data = {}
             
             for key in first_item[obs_type][inst_name].keys():
-                if key in ['o2m', 'm2o']:
+                if key in included_features:
                     # For graph data, just collect the dictionaries
                     inst_data[key] = [
                         item[obs_type][inst_name][key]
                         for item in batch
                     ]
                 else:
-                    # For regular tensors, use torch.stack
-                    inst_data[key] = torch.stack([
-                        item[obs_type][inst_name][key] 
-                        for item in batch
-                    ])
+                    print(f'{key} is excluded')
+                
             
             batched[obs_type][inst_name] = inst_data
             
