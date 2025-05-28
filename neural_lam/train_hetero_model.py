@@ -98,11 +98,21 @@ def main(override_args=None):
     if args.devices != 'auto':
         args.devices = int(args.devices)
     
-    # Initialize data module
-    datamodule = WeatherDataModule(args)
-    
+
     # Initialize model
     model = HeteroObservationGraphModel(args)
+
+    # Initialize data module
+    datamodule = WeatherDataModule(
+        data_path=args.data_path,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        observation_config=args.observation_config,
+        mesh_structure=model.mesh_structure,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        args = args
+    )
     
     # Set graph structures from dataset
     datamodule.setup()

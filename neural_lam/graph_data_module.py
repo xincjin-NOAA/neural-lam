@@ -151,43 +151,4 @@ class WeatherDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=collate_weather_batch
         )
-    def train_dataloader(self):
-        """Create training dataloader"""
-        return DataLoader(
-            self.dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
-        )
-    
-    def val_dataloader(self):
-        """Create validation dataloader"""
-        return DataLoader(
-            self.dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
-        )
-    
-    def test_dataloader(self):
-        """Create test dataloader"""
-        return DataLoader(
-            self.dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
-        )
-    
-    def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=True,
-            num_workers=self.args.num_workers if hasattr(self.args, 'num_workers') else 4,
-            persistent_workers=True,
-            pin_memory=True,
-            collate_fn=collate_weather_batch
-        )
+  
