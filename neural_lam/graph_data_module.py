@@ -1,68 +1,187 @@
 """
-Example training script for HeteroObservationGraphModel using PyTorch Lightning.
+PyTorch Lightning DataModule for weather data using GraphDataset.
 """
 
-from torch_geometric.loader import DataLoader
-from pytorch_lightning.loggers import TensorBoardLogger
-from .graph_dataset import GraphDataset
 import pytorch_lightning as pl
 import torch
-from typing import Optional, Dict, List, Any
+from typing import Dict, List, Optional, Union
 from torch_geometric.data import Batch
-from torch.utils.data._utils.collate import default_collate
+from torch.utils.data import DataLoader
 
+from .graph_dataset import GraphDataset
 
 def collate_weather_batch(batch: List[Dict]) -> Dict:
-    # Each batch item has:
-    # - observations: Dict[str, Tuple[Tensor, Tensor]]
-    # - obs_graphs: Dict[str, Dict[str, Data]]
+    """
+    Collate function for batching weather data samples.
     
-    observations = {}
-    obs_graphs = {}
-    
-    # Process each observation type (temp, pressure, etc)
-    for obs_type in batch[0]['observations'].keys():
-        # Stack locations and values from all batch items
-        locations = torch.stack([item['observations'][obs_type][0] for item in batch])
-        values = torch.stack([item['observations'][obs_type][1] for item in batch])
-        observations[obs_type] = (locations, values)
+    Args:
+        batch: List of dictionaries from GraphDataset.__getitem__
         
-        # Batch the PyG graphs
-        o2m_graphs = [item['obs_graphs'][obs_type]['o2m'] for item in batch]
-        m2o_graphs = [item['obs_graphs'][obs_type]['m2o'] for item in batch]
-        obs_graphs[obs_type] = {
-            'o2m': Batch.from_data_list(o2m_graphs),
-            'm2o': Batch.from_data_list(m2o_graphs)
-        }
+    Returns:
+        Batched dictionary with:
+        - For each observation type and instrument:
+            - input_values: Input observation values
+            - target_values: Target observation values
+            - o2m: Dictionary with graph data for encoding
+            - m2o: Dictionary with graph data for decoding
+    """
+    batched = {}
     
-    return {
-        'observations': observations,
-        'obs_graphs': obs_graphs
-    }
+    # Get first item to determine structure
+    first_item = batch[0]
+    
+    # Process each observation type
+    for obs_type in first_item.keys():
+        batched[obs_type] = {}
+        
+        # Process each instrument
+        for inst_name in first_item[obs_type].keys():
+            # Get data for this observation type/instrument
+            inst_data = {}
+            
+            for key in first_item[obs_type][inst_name].keys():
+                if key in ['o2m', 'm2o']:
+                    # For graph data, just collect the dictionaries
+                    inst_data[key] = [
+                        item[obs_type][inst_name][key]
+                        for item in batch
+                    ]
+                else:
+                    # For regular tensors, use torch.stack
+                    inst_data[key] = torch.stack([
+                        item[obs_type][inst_name][key] 
+                        for item in batch
+                    ])
+            
+            batched[obs_type][inst_name] = inst_data
+            
+    return batched
 
 class WeatherDataModule(pl.LightningDataModule):
-    def __init__(self, args):
-        super().__init__()
-        self.args = args
-        self.dataset = None
+    def __init__(
+        self,
+        data_path: str,
+        start_date: str,
+        end_date: str,
+        observation_config: Dict[str, Dict],
+        mesh_structure: Dict,
+        train_val_test_split: Optional[List[float]] = None,
+        batch_size: int = 8,
+        num_workers: int = 4,
+        args = None
+    ):
+        """
+        DataModule for weather prediction using GraphDataset.
         
-    def setup(self, stage=None):
-        if self.dataset is None:
-            # Create dataset
-            self.dataset = GraphDataset(
-                data_path=self.args.data_path,
-                start_date=self.args.start_date,
-                end_date=self.args.end_date,
-                observation_config=self.args.observation_config
+        Args:
+            data_path: Path to data directory
+            start_date: Start date for data range
+            end_date: End date for data range
+            observation_config: Configuration for observation types
+            mesh_structure: Mesh graph structure
+            train_val_test_split: Optional list of [train, val, test] fractions
+            batch_size: Batch size for dataloaders
+            num_workers: Number of workers for dataloaders
+            args: Additional arguments passed to GraphDataset
+        """
+        super().__init__()
+        self.data_path = data_path
+        self.start_date = start_date
+        self.end_date = end_date
+        self.observation_config = observation_config
+        self.mesh_structure = mesh_structure
+        self.train_val_test_split = train_val_test_split or [0.8, 0.1, 0.1]
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.args = args
+        
+        # Will be set up in setup()
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+        
+    def setup(self, stage: Optional[str] = None):
+        """Create and split dataset if not already created"""
+        if self.train_dataset is None:
+            # Create full dataset
+            dataset = GraphDataset(
+                data_path=self.data_path,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                observation_config=self.observation_config,
+                mesh_structure=self.mesh_structure,
+                args=self.args
             )
-            self.dataset.setup()
+            dataset.setup()
             
-            # # Split dataset
-            # train_size = int(0.8 * len(self.dataset))
-            # val_size = len(self.dataset) - train_size
-            # self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-            #     self.dataset, [train_size, val_size]
-            # )
+            # Split dataset
+            total_size = len(dataset)
+            train_size = int(self.train_val_test_split[0] * total_size)
+            val_size = int(self.train_val_test_split[1] * total_size)
+            test_size = total_size - train_size - val_size
+            
+            self.train_dataset, self.val_dataset, self.test_dataset = torch.utils.data.random_split(
+                dataset, [train_size, val_size, test_size]
+            )
+    
+    def train_dataloader(self) -> DataLoader:
+        """Create training dataloader"""
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
+    
+    def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+        """Create validation dataloader"""
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
+    
+    def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+        """Create test dataloader"""
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
+    def train_dataloader(self):
+        """Create training dataloader"""
+        return DataLoader(
+            self.dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
+    
+    def val_dataloader(self):
+        """Create validation dataloader"""
+        return DataLoader(
+            self.dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
+    
+    def test_dataloader(self):
+        """Create test dataloader"""
+        return DataLoader(
+            self.dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=collate_weather_batch
+        )
     
     def train_dataloader(self):
         return DataLoader(
@@ -74,14 +193,3 @@ class WeatherDataModule(pl.LightningDataModule):
             pin_memory=True,
             collate_fn=collate_weather_batch
         )
-    
-    # def val_dataloader(self):
-    #     return DataLoader(
-    #         self.val_dataset,
-    #         batch_size=self.args.batch_size,
-    #         shuffle=False,
-    #         num_workers=self.args.num_workers if hasattr(self.args, 'num_workers') else 4,
-    #         persistent_workers=True,
-    #         pin_memory=True,
-    #         collate_fn=collate_weather_batch
-    #     )
