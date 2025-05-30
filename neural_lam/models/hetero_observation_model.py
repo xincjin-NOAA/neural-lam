@@ -13,12 +13,12 @@ from torch_geometric.nn import GATConv
 import torch
 import torch.nn as nn
 
-from .ar_model import ARModel
+from .ar_dop_model import ARDOPModel
 from .. import utils
 from ..interaction_net import InteractionNet
 from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh, project_coords
 
-class HeteroObservationGraphModel(ARModel):
+class HeteroObservationGraphModel(ARDOPModel):
     """
     Graph neural network model for processing heterogeneous observations.
     Handles observations of different types (temperature, wind, pressure, etc.)
@@ -408,5 +408,5 @@ class HeteroObservationGraphModel(ARModel):
 
                 # Decode predictions from mesh-derived features
                 predictions[obs_type][inst_name] = self.observation_decoders[obs_type_str](obs_features)
-
-        return predictions
+        pred_std = None
+        return predictions, pred_std
