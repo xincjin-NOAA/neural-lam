@@ -179,12 +179,12 @@ class ARDOPModel(pl.LightningModule):
         target_states: (B, pred_steps, num_grid_nodes, d_features)
         forcing_features: (B, pred_steps, num_grid_nodes, d_forcing),
             where index 0 corresponds to index 1 of init_states
-        """
-        target = batch[1]   
+        """   
         prediction, pred_std = self.predict_step(batch)  # (B, pred_steps, num_grid_nodes, d_f)
         # prediction: (B, pred_steps, num_grid_nodes, d_f)
         # pred_std: (B, pred_steps, num_grid_nodes, d_f) or (d_f,)
 
+        target = batch
         return prediction, target, pred_std
 
     def training_step(self, batch):
