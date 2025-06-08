@@ -314,7 +314,7 @@ class HeteroObservationGraphModel(ARDOPModel):
         """
 
         # assume batch size as 1
-        observations = batch_data
+        observations = batch_data[0]
 
         # Get batch info
         batch_size = 1  # next(iter(observations.values()))[0].shape[0]

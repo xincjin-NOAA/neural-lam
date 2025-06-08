@@ -7,10 +7,30 @@ import torch
 from typing import Dict, List, Optional, Union
 from torch_geometric.data import Batch
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 from .graph_dataset import GraphDataset
 
+
 def collate_weather_batch(batch: List[Dict]) -> Dict:
+    """
+    Collate function for batching weather data samples.
+    
+    Args:
+        batch: List of dictionaries from GraphDataset.__getitem__
+        
+    Returns:
+        Batched dictionary with:
+        - For each observation type and instrument:
+            - input_values: Input observation values
+            - target_values: Target observation values
+            - o2m: Dictionary with graph data for encoding
+            - m2o: Dictionary with graph data for decoding
+    """
+    return batch
+
+    
+def collate_weather_batch_together(batch: List[Dict]) -> Dict:
     """
     Collate function for batching weather data samples.
     
@@ -92,6 +112,8 @@ class WeatherDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.args = args
+
+        self.collate_batch = collate_weather_batch
         
         # Will be set up in setup()
         self.train_dataset = None
@@ -129,7 +151,7 @@ class WeatherDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
+            collate_fn=self.collate_batch
         )
     
     def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
@@ -139,7 +161,7 @@ class WeatherDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
+            collate_fn=self.collate_batch
         )
     
     def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
@@ -149,6 +171,6 @@ class WeatherDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collate_weather_batch
+            collate_fn=self.collate_batch
         )
   
