@@ -9,7 +9,7 @@ import torch
 import wandb
 
 # Local
-from .. import config, metrics, utils, vis
+from .. import config, metrics_dop, utils, vis
 
 
 class ARDOPModel(pl.LightningModule):
