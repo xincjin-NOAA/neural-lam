@@ -62,7 +62,7 @@ def main(input_args=None):
         help="upper epoch limit (default: 200)",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=4, help="batch size (default: 4)"
+        "--batch_size", type=int, default=2, help="batch size (default: 4)"
     )
     parser.add_argument(
         "--load",

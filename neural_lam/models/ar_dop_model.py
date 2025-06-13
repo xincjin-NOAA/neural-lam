@@ -65,7 +65,7 @@ class ARDOPModel(pl.LightningModule):
         )
 
         # Instantiate loss function
-        self.loss = metrics.get_metric(args.loss)
+        self.loss = metrics_dop.get_metric(args.loss)
 
         # Pre-compute interior mask for use in loss function
         self.register_buffer(

@@ -202,7 +202,15 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
 
         predictions_dict, pred_std_dict = self.predict_step(batch_data_for_model)
         
-        target_features_dict = batch['targets'] # Assuming targets are in batch['targets']
+        # target_features_dict = batch['targets'] # Assuming targets are in batch['targets']
+        observations = batch_data_for_model[0]
+        target_features_dict = {}
+        for obs_type in observations:
+            target_features_dict[obs_type] = {}
+            pred_std_dict[obs_type] = {} # Initialize inner dict for std devs
+            for inst_name in observations[obs_type]:
+                bin_data = observations[obs_type][inst_name] 
+                target_features_dict[obs_type][inst_name] = bin_data["target_features_final"]
 
         batch_loss, _ = self._compute_batch_loss_and_outputs(
             predictions_dict,
@@ -211,7 +219,7 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
             compute_metrics_for_epoch_end=False # Not needed for training_step outputs
         )
 
-        self.log("train_loss", batch_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        #self.log("train_loss", batch_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
         return batch_loss
 
     def validation_step(self, batch, batch_idx):
