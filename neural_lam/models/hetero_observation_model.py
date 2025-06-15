@@ -525,7 +525,7 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
         try:
             # Load grid coordinates
             grid_path = os.path.join(
-                '/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data/rrfs_15km_example/static',
+               '/scratch3/NCEPDEV/stmp/Xin.C.Jin/my_projects/neural_lam/scripts/data/rrfs_15km_example/static',
                 '15km_rrfs-grib-grid_xy_coordinates.npy'
             )
             grid_coordinates = np.load(grid_path)

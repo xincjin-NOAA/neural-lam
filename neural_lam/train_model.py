@@ -96,7 +96,7 @@ def main(input_args=None):
         type=int,
         default=64,
         help="Dimensionality of all hidden representations (default: 64)",
-    )
+    )n_work
     parser.add_argument(
         "--hidden_layers",
         type=int,

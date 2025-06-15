@@ -76,7 +76,8 @@ def parse_args():
     
     # # Validate paths
     # if args.data_path == "/path/to/your/data":
-    #     print("WARNING: Using default data path. Please update --data_path to your actual data directory.")
+    #    raise Warning("Using default data path. Please update --data_path to your actual data directory.")
+        
     
     return args
 
@@ -97,8 +98,7 @@ def main(override_args=None):
     # Convert devices to int if not 'auto'
     if args.devices != 'auto':
         args.devices = int(args.devices)
-    
-
+        
     # Initialize model
     model = HeteroObservationGraphModel(args)
 
@@ -144,18 +144,22 @@ def main(override_args=None):
         name='hetero_model',
         default_hp_metric=False
     )
-    
+
+    print('---cuda:')
+    print(torch.__version__)
+    print(torch.version.cuda)  # Should match CUDA 12.x
+
     # Initialize trainer with multi-GPU settings
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
-        accelerator=args.accelerator,
+        accelerator= "gpu" if torch.cuda.is_available() else "cpu",
         devices=args.devices,
         strategy=args.strategy,
         precision=args.precision,
         #callbacks=[checkpoint_callback, early_stop_callback],
         logger=logger,
         gradient_clip_val=0.5,
-        profiler=profiler,
+        # profiler=profiler,
         sync_batchnorm=True,  # Important for multi-GPU training
         use_distributed_sampler=True,  # Handles data distribution
         num_sanity_val_steps=2,
@@ -165,17 +169,23 @@ def main(override_args=None):
     
     return trainer, model, datamodule
 
+
 if __name__ == "__main__":
     # CONUS data path:
-    data_path = "/scratch1/NCEPDEV/da/Ronald.McLaren/shared/ocelot/data_v2/"
-    
+    data_path = "/scratch3/NCEPDEV/stmp/Xin.C.Jin/data/ocelot/data_v2/"
+
+    start_date = "2024-04-01"
+    end_date = "2024-04-04"
+
     # Observation configuration, will move to a config file later.
     observation_config = {
         "satellite": {
             'atms': {
                 "sat_ids": [224, 225],
                 "features": [f"bt_channel_{i}" for i in range(1, 23)],
-                "metadata": ["sensorZenithAngle", "solarZenithAngle", "solarAzimuthAngle"]
+                "metadata": ["sensorZenithAngle", "solarZenithAngle", "solarAzimuthAngle"],
+                "input_dim": 30,
+                "target_dim": 22,
             },
             # "iasi": ,
             # "goes":,
@@ -184,11 +194,13 @@ if __name__ == "__main__":
         "conventional": {
             # "radiosonde": ,
             "pressure": {
-                "features": ["height", "stationPressure"]
+                "features": ["height", "stationPressure"],
+                "input_dim": 7,
+                "target_dim": 2,
             },
             # "surface_marine": ,
             # "surface_land":
-        }
+        },
     }
 
     args_dict = {
@@ -199,7 +211,7 @@ if __name__ == "__main__":
         "levels": 4,
         "plot": False,
         "hierarchical": True,  # The last assignment overrides the previous one
-        "data_config": "/scratch1/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data_config_15km.yaml",
+        "data_config": '/scratch3/NCEPDEV/stmp/Xin.C.Jin/my_projects/neural_lam/scripts/data_config_15km.yaml',
         "output_std": False,
         "loss": "MSE",
         "restore_opt": False,
@@ -211,9 +223,16 @@ if __name__ == "__main__":
         "mesh_resolution": 4,
         "cutoff_factor": 0.67,
         "num_neighbors": 2,
-        "step_length": 6
-    } 
-    
+        "step_length": 6,
+        "num_heads": 4,
+        "accelerator": "gpu",
+        "strategy": 'auto', # "single_device", #"auto",
+        "devices": 1,
+        "precision": 32,
+        "num_workers": 4,
+        "max_epochs": 10,
+    }
+
     # Run with custom arguments
     trainer, model, datamodule = main(override_args=args_dict)
     

@@ -119,6 +119,7 @@ class WeatherDataModule(pl.LightningDataModule):
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
+        print(f'data_path: {data_path}')
         
     def setup(self, stage: Optional[str] = None):
         """Create and split dataset if not already created"""
