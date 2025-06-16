@@ -104,8 +104,11 @@ class InteractionNet(pyg.nn.MessagePassing):
         # Always concatenate to [rec_nodes, send_nodes] for propagation,
         # but only aggregate to rec_nodes
         node_reps = torch.cat((rec_rep, send_rep), dim=-2)
+        device = send_rep[0].device
+        edge_index_copy = self.edge_index.clone().to(device)
+        # print(edge_index_copy[0].device)
         edge_rep_aggr, edge_diff = self.propagate(
-            self.edge_index, x=node_reps, edge_attr=edge_rep
+            edge_index_copy, x=node_reps, edge_attr=edge_rep
         )
         rec_diff = self.aggr_mlp(torch.cat((rec_rep, edge_rep_aggr), dim=-1))
 

@@ -148,7 +148,8 @@ def main(override_args=None):
     print('---cuda:')
     print(torch.__version__)
     print(torch.version.cuda)  # Should match CUDA 12.x
-
+    if torch.cuda.is_available():
+        print('cuda available')
     # Initialize trainer with multi-GPU settings
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
@@ -226,7 +227,7 @@ if __name__ == "__main__":
         "step_length": 6,
         "num_heads": 4,
         "accelerator": "gpu",
-        "strategy": 'auto', # "single_device", #"auto",
+        "strategy": "auto",
         "devices": 1,
         "precision": 32,
         "num_workers": 4,
