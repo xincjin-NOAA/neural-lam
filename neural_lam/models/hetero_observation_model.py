@@ -18,8 +18,12 @@ from .. import utils
 from ..interaction_net import InteractionNet
 from ..create_mesh_graph import create_mesh_structure, create_obs_conn_mesh, project_coords
 
-from collections import defaultdict # Add this import
-from .. import metrics_dop # Assuming metrics_dop is accessible like this
+from collections import defaultdict
+import matplotlib.pyplot as plt
+import os 
+from .. import metrics_dop 
+from pathlib import Path
+import numpy as np
 
 class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not inheriting ARDOPModel's PL logic
 
@@ -334,6 +338,37 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
             log_dict_epoch_metrics[f"test_rmse_{obs_key}"] = rmse_value
 
         self.log_dict(log_dict_epoch_metrics, sync_dist=True)
+
+        # Plotting logic
+        if hasattr(self.hparams, 'plot_on_test') and self.hparams.plot_on_test:
+            plot_dir = Path(self.trainer.logger.log_dir) / "plots" / f"epoch_{self.current_epoch}"
+            if self.trainer.is_global_zero: # Ensure directory is created only by rank 0 in DDP
+                os.makedirs(plot_dir, exist_ok=True)
+            
+            for obs_key, data_lists in aggregated_metrics_data.items():
+                all_preds_np = torch.cat(data_lists['preds'], dim=0).cpu().numpy().flatten()
+                all_targets_np = torch.cat(data_lists['targets'], dim=0).cpu().numpy().flatten()
+
+                # Plot a subset if data is too large
+                num_points_to_plot = min(len(all_preds_np), 1000) 
+                indices = np.random.choice(len(all_preds_np), num_points_to_plot, replace=False)
+                
+                plt.figure(figsize=(8, 8))
+                plt.scatter(all_targets_np[indices], all_preds_np[indices], alpha=0.5, s=10)
+                min_val = min(all_targets_np[indices].min(), all_preds_np[indices].min())
+                max_val = max(all_targets_np[indices].max(), all_preds_np[indices].max())
+                plt.plot([min_val, max_val], [min_val, max_val], 'r--') # Diagonal line
+                plt.xlabel("True Values")
+                plt.ylabel("Predictions")
+                plt.title(f"Test Predictions vs. True Values - {obs_key} (Epoch {self.current_epoch})")
+                plt.grid(True)
+                plot_path = plot_dir / f"test_scatter_{obs_key}.png"
+                if self.trainer.is_global_zero:
+                    plt.savefig(plot_path)
+                plt.close()
+                if self.trainer.is_global_zero:
+                    print(f"Saved plot to {plot_path}")
+
         self.test_step_outputs.clear() # Important!
 
     def create_batch_mesh_edges(self, batch_size: int, device: torch.device) -> torch.Tensor:

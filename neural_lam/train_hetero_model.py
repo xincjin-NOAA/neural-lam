@@ -11,6 +11,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 import argparse
 from pathlib import Path
+import os
 
 from .models.hetero_observation_model import HeteroObservationGraphModel
 from .graph_dataset import GraphDataset
@@ -43,6 +44,8 @@ def parse_args():
                         help="Learning rate")
     train_group.add_argument("--weight_decay", type=float, default=1e-5,
                         help="Weight decay for optimizer")
+    train_group.add_argument('--plot_on_test', action='store_true',
+                        help='Generate and save plots during the test phase.')
     
     # Multi-GPU parameters
     gpu_group = parser.add_argument_group('Multi-GPU Configuration')
@@ -113,7 +116,7 @@ def main(override_args=None):
         num_workers=args.num_workers,
         args = args
     )
-    
+
     # Set graph structures from dataset
     datamodule.setup()
     
@@ -157,15 +160,13 @@ def main(override_args=None):
         devices=args.devices,
         strategy=args.strategy,
         precision=args.precision,
-        #callbacks=[checkpoint_callback, early_stop_callback],
+        callbacks=[checkpoint_callback, early_stop_callback],
         logger=logger,
         gradient_clip_val=0.5,
-        # profiler=profiler,
-        sync_batchnorm=True,  # Important for multi-GPU training
-        use_distributed_sampler=True,  # Handles data distribution
+        sync_batchnorm=True,
         num_sanity_val_steps=2,
-        accumulate_grad_batches=1,  # Adjust if needed for larger effective batch size
-        deterministic=True  # Ensures reproducibility across GPUs
+        deterministic=True,
+        log_every_n_steps=3
     )
     
     return trainer, model, datamodule
@@ -238,4 +239,35 @@ if __name__ == "__main__":
     trainer, model, datamodule = main(override_args=args_dict)
     
     # Train the model
-    trainer.fit(model, datamodule)
+        print("--- Starting Training ---")
+        # Use load_ckpt_path to resume training if provided
+        trainer.fit(model, datamodule, ckpt_path=args.load_ckpt_path if args.action == 'train' else None)
+        print("--- Training Finished ---")
+
+    if args.action in ['test', 'train_and_test']:
+        print("--- Starting Testing ---")
+        ckpt_path_for_test = args.load_ckpt_path
+
+        # If training was just done, find the best checkpoint from that run
+        if args.action == 'train_and_test':
+            best_model_path = None
+            for cb in trainer.callbacks:
+                if isinstance(cb, pl.callbacks.ModelCheckpoint):
+                    best_model_path = cb.best_model_path
+                    break
+            if best_model_path and os.path.exists(best_model_path):
+                print(f"Found best checkpoint from training run: {best_model_path}")
+                ckpt_path_for_test = best_model_path
+            else:
+                print("Could not find the best checkpoint from the training run. Testing with the model's final weights.")
+
+        if ckpt_path_for_test and os.path.exists(ckpt_path_for_test):
+            print(f"Loading model for testing from: {ckpt_path_for_test}")
+            trainer.test(datamodule=datamodule, ckpt_path=ckpt_path_for_test)
+        elif args.action == 'test':
+             raise FileNotFoundError(f"Checkpoint not found at specified path for testing: {ckpt_path_for_test}")
+        else: # train_and_test case where checkpoint wasn't found
+            print("No checkpoint specified or found, testing with model's current weights.")
+            trainer.test(model=model, datamodule=datamodule)
+            
+        print("--- Testing Finished ---")
