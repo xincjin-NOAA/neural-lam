@@ -92,6 +92,57 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
         # Set up observation networks if config provided
         if hasattr(args, 'observation_config') and args.observation_config:
             self.setup_observation_networks(args.observation_config)
+    def transfer_batch_to_device(self, batch, device: torch.device, dataloader_idx: int):
+        # First, let PyTorch Lightning handle the standard parts of the batch
+        batch = super().transfer_batch_to_device(batch, device, dataloader_idx)
+
+        # Manually move nested PyG Data objects in 'observations'
+        if hasattr(batch, 'observations') and isinstance(batch.observations, dict):
+            for obs_type_key in batch.observations:
+                if isinstance(batch.observations.get(obs_type_key), dict):
+                    for inst_name_key in batch.observations[obs_type_key]:
+                        obs_instance_data = batch.observations[obs_type_key].get(inst_name_key)
+                        if isinstance(obs_instance_data, dict):
+                            # Move o2m graph
+                            if ('o2m' in obs_instance_data and 
+                                    isinstance(obs_instance_data.get('o2m'), dict) and
+                                    'graph' in obs_instance_data['o2m'] and
+                                    hasattr(obs_instance_data['o2m'].get('graph'), 'to')):
+                                obs_instance_data['o2m']['graph'] = obs_instance_data['o2m']['graph'].to(device)
+                            
+                            # Move m2o graph
+                            if ('m2o' in obs_instance_data and
+                                    isinstance(obs_instance_data.get('m2o'), dict) and
+                                    'graph' in obs_instance_data['m2o'] and
+                                    hasattr(obs_instance_data['m2o'].get('graph'), 'to')):
+                                obs_instance_data['m2o']['graph'] = obs_instance_data['m2o']['graph'].to(device)
+                            
+                            # Move features tensor
+                            if ('features' in obs_instance_data and
+                                    isinstance(obs_instance_data.get('features'), torch.Tensor)):
+                                obs_instance_data['features'] = obs_instance_data['features'].to(device)
+
+                            # Move locations tensor
+                            if ('locations' in obs_instance_data and
+                                    isinstance(obs_instance_data.get('locations'), torch.Tensor)):
+                                obs_instance_data['locations'] = obs_instance_data['locations'].to(device)
+        
+        # Manually move 'target_features' if it exists and is a dictionary of tensors
+        if hasattr(batch, 'target_features') and isinstance(batch.target_features, dict):
+            for obs_type_key in batch.target_features:
+                if isinstance(batch.target_features.get(obs_type_key), dict):
+                    for inst_name_key in batch.target_features[obs_type_key]:
+                        target_tensor = batch.target_features[obs_type_key].get(inst_name_key)
+                        if isinstance(target_tensor, torch.Tensor):
+                            batch.target_features[obs_type_key][inst_name_key] = target_tensor.to(device)
+
+        # Manually move 'mesh_static_features' if it's part of the batch and a tensor
+        if hasattr(batch, 'mesh_static_features') and isinstance(batch.mesh_static_features, torch.Tensor):
+            if batch.mesh_static_features.device != device: # Avoid redundant .to(device) calls
+                 batch.mesh_static_features = batch.mesh_static_features.to(device)
+            
+        return batch
+
     # ... (your existing methods like create_batch_mesh_edges, predict_step, etc.) ...
 
     def _get_std_for_loss(self, pred_value_tensor, std_value_representation=None):
