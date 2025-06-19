@@ -124,7 +124,7 @@ def main(override_args=None):
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='checkpoints',
-        filename='hetero-model-{epoch:02d}-{val_loss:.2f}',
+        filename='hetero-model-{epoch:02d}-{val_loss_step:.2f}',
         save_top_k=3,
         mode='min'
     )
@@ -160,16 +160,16 @@ def main(override_args=None):
         devices=args.devices,
         strategy=args.strategy,
         precision=args.precision,
-        callbacks=[checkpoint_callback, early_stop_callback],
+        callbacks=[checkpoint_callback],
         logger=logger,
         gradient_clip_val=0.5,
         sync_batchnorm=True,
         num_sanity_val_steps=2,
         deterministic=True,
-        log_every_n_steps=3
+        log_every_n_steps=1
     )
     
-    return trainer, model, datamodule
+    return args, trainer, model, datamodule
 
 
 if __name__ == "__main__":
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         "levels": 4,
         "plot": False,
         "hierarchical": True,  # The last assignment overrides the previous one
-        "data_config": '/scratch3/NCEPDEV/stmp/Xin.C.Jin/my_projects/neural_lam/scripts/data_config_15km.yaml',
+        "data_config": '/scratch3/NCEPDEV/da/Xin.C.Jin/my_projects/neural_lam/scripts/data_config_15km.yaml',
         "output_std": False,
         "loss": "MSE",
         "restore_opt": False,
@@ -233,17 +233,19 @@ if __name__ == "__main__":
         "precision": 32,
         "num_workers": 4,
         "max_epochs": 10,
+        "load_ckpt_path": 'checkpoint',
+        "action": 'start_train'
     }
 
     # Run with custom arguments
-    trainer, model, datamodule = main(override_args=args_dict)
+    args, trainer, model, datamodule = main(override_args=args_dict)
     
     # Train the model
-        print("--- Starting Training ---")
-        # Use load_ckpt_path to resume training if provided
-        trainer.fit(model, datamodule, ckpt_path=args.load_ckpt_path if args.action == 'train' else None)
-        print("--- Training Finished ---")
-
+    print("--- Starting Training ---")
+    # Use load_ckpt_path to resume training if provided
+    trainer.fit(model, datamodule, ckpt_path=args.load_ckpt_path if args.action == 'train' else None)
+    print("--- Training Finished ---")
+    trainer.save_checkpoint("train_model.ckpt")
     if args.action in ['test', 'train_and_test']:
         print("--- Starting Testing ---")
         ckpt_path_for_test = args.load_ckpt_path

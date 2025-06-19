@@ -237,7 +237,7 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
             compute_metrics_for_epoch_end=True
         )
         
-        self.log("val_loss_step", batch_loss, on_step=True, on_epoch=False, sync_dist=True)
+        self.log("val_loss", batch_loss, on_step=False, on_epoch=True, sync_dist=True)
         # Store all necessary parts for on_validation_epoch_end
         # The 'outputs_for_metrics' already contains detached preds, targets, stds
         self.validation_step_outputs.append({
