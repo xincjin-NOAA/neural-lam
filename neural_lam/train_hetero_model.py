@@ -124,10 +124,13 @@ def main(override_args=None):
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='checkpoints',
-        filename='hetero-model-{epoch:02d}-{val_loss_step:.2f}',
-        save_top_k=3,
+        filename="hetero-model-{epoch:02d}-{val_loss:.2f}",
+        save_top_k=1,
+        every_n_epochs=3,
         mode='min'
     )
+
+    print("Checkpoint callback filename template:", checkpoint_callback.filename)
     
     early_stop_callback = EarlyStopping(
         monitor='val_loss',
@@ -160,13 +163,13 @@ def main(override_args=None):
         devices=args.devices,
         strategy=args.strategy,
         precision=args.precision,
-        callbacks=[checkpoint_callback],
+        callbacks=checkpoint_callback,
         logger=logger,
         gradient_clip_val=0.5,
         sync_batchnorm=True,
-        num_sanity_val_steps=2,
+        num_sanity_val_steps=0,
         deterministic=True,
-        log_every_n_steps=1
+        log_every_n_steps=1,
     )
     
     return args, trainer, model, datamodule
@@ -209,7 +212,7 @@ if __name__ == "__main__":
         "data_path": data_path,
         "observation_config": observation_config,
         "start_date":  "2024-04-01",
-        "end_date":  "2024-04-04",
+        "end_date":  "2024-04-10",
         "levels": 4,
         "plot": False,
         "hierarchical": True,  # The last assignment overrides the previous one
@@ -234,7 +237,8 @@ if __name__ == "__main__":
         "num_workers": 4,
         "max_epochs": 10,
         "load_ckpt_path": 'checkpoint',
-        "action": 'start_train'
+        "action": 'start_train',
+        "batch_size": 1,
     }
 
     # Run with custom arguments

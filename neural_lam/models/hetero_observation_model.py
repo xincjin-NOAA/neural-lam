@@ -226,18 +226,28 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
         return batch_loss
 
     def validation_step(self, batch, batch_idx):
-        batch_data_for_model = batch
+        batch_data_for_model = batch # Or batch.get('observations_input_format_for_predict_step')
+
         predictions_dict, pred_std_dict = self.predict_step(batch_data_for_model)
-        target_features_dict = batch['targets']
+        
+        # target_features_dict = batch['targets'] # Assuming targets are in batch['targets']
+        observations = batch_data_for_model[0]
+        target_features_dict = {}
+        for obs_type in observations:
+            target_features_dict[obs_type] = {}
+            pred_std_dict[obs_type] = {} # Initialize inner dict for std devs
+            for inst_name in observations[obs_type]:
+                bin_data = observations[obs_type][inst_name] 
+                target_features_dict[obs_type][inst_name] = bin_data["target_features_final"]
 
         batch_loss, outputs_for_metrics = self._compute_batch_loss_and_outputs(
             predictions_dict,
             target_features_dict,
             pred_std_dict,
-            compute_metrics_for_epoch_end=True
+            compute_metrics_for_epoch_end=False # Not needed for training_step outputs
         )
         
-        self.log("val_loss", batch_loss, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_loss", batch_loss, prog_bar=True, sync_dist=True, on_epoch=True)
         # Store all necessary parts for on_validation_epoch_end
         # The 'outputs_for_metrics' already contains detached preds, targets, stds
         self.validation_step_outputs.append({
@@ -250,41 +260,41 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
         if not self.validation_step_outputs:
             return
 
-        # Aggregate losses
-        avg_epoch_loss = torch.stack([x['loss'] for x in self.validation_step_outputs]).mean()
-        self.log("val_loss_epoch", avg_epoch_loss, sync_dist=True)
+        # # Aggregate losses
+        # avg_epoch_loss = torch.stack([x['loss'] for x in self.validation_step_outputs]).mean()
+        # self.log("val_loss_epoch", avg_epoch_loss, sync_dist=True)
 
-        # Aggregate metrics_data
-        # This will be a dict: {'obs_type_inst_name': {'preds': [tensors], 'targets': [tensors], 'pred_stds': [tensors]}}
-        aggregated_metrics_data = defaultdict(lambda: {'preds': [], 'targets': [], 'pred_stds': []})
+        # # Aggregate metrics_data
+        # # This will be a dict: {'obs_type_inst_name': {'preds': [tensors], 'targets': [tensors], 'pred_stds': [tensors]}}
+        # aggregated_metrics_data = defaultdict(lambda: {'preds': [], 'targets': [], 'pred_stds': []})
 
-        for step_output in self.validation_step_outputs:
-            for obs_key, data_dict in step_output['metrics_data'].items():
-                aggregated_metrics_data[obs_key]['preds'].append(data_dict['preds'])
-                aggregated_metrics_data[obs_key]['targets'].append(data_dict['targets'])
-                if data_dict['pred_stds'] is not None: # Should always be a tensor now due to _get_std_for_loss
-                    aggregated_metrics_data[obs_key]['pred_stds'].append(data_dict['pred_stds'])
+        # for step_output in self.validation_step_outputs:
+        #     for obs_key, data_dict in step_output['metrics_data'].items():
+        #         aggregated_metrics_data[obs_key]['preds'].append(data_dict['preds'])
+        #         aggregated_metrics_data[obs_key]['targets'].append(data_dict['targets'])
+        #         if data_dict['pred_stds'] is not None: # Should always be a tensor now due to _get_std_for_loss
+        #             aggregated_metrics_data[obs_key]['pred_stds'].append(data_dict['pred_stds'])
         
-        log_dict_epoch_metrics = {}
-        for obs_key, data_lists in aggregated_metrics_data.items():
-            all_preds = torch.cat(data_lists['preds'], dim=0)
-            all_targets = torch.cat(data_lists['targets'], dim=0)
-            all_pred_stds_for_loss = torch.cat(data_lists['pred_stds'], dim=0) # Stds used in loss
+        # log_dict_epoch_metrics = {}
+        # for obs_key, data_lists in aggregated_metrics_data.items():
+        #     all_preds = torch.cat(data_lists['preds'], dim=0)
+        #     all_targets = torch.cat(data_lists['targets'], dim=0)
+        #     all_pred_stds_for_loss = torch.cat(data_lists['pred_stds'], dim=0) # Stds used in loss
 
-            # Re-calculate primary loss metric (e.g., WMSE) on all aggregated data for this obs_key
-            # This ensures the epoch metric is based on the full validation set for that obs_type
-            metric_values = self.loss_function(all_preds, all_targets, all_pred_stds_for_loss, mask=None)
-            avg_metric = torch.mean(metric_values)
-            log_dict_epoch_metrics[f"val_metric_{obs_key}"] = avg_metric # e.g. val_wmse_obsType_instName
+        #     # Re-calculate primary loss metric (e.g., WMSE) on all aggregated data for this obs_key
+        #     # This ensures the epoch metric is based on the full validation set for that obs_type
+        #     metric_values = self.loss_function(all_preds, all_targets, all_pred_stds_for_loss, mask=None)
+        #     avg_metric = torch.mean(metric_values)
+        #     log_dict_epoch_metrics[f"val_metric_{obs_key}"] = avg_metric # e.g. val_wmse_obsType_instName
 
-            # You can add other metrics here, e.g., unweighted RMSE
-            # rmse_fn = metrics_dop.get_metric("rmse") # You'd need to implement rmse or derive from mse
-            # For RMSE, you'd typically use unweighted MSE first, then sqrt
-            unweighted_mse_values = metrics_dop.mse(all_preds, all_targets, torch.ones_like(all_preds), mask=None)
-            rmse_value = torch.sqrt(torch.mean(unweighted_mse_values))
-            log_dict_epoch_metrics[f"val_rmse_{obs_key}"] = rmse_value
+        #     # You can add other metrics here, e.g., unweighted RMSE
+        #     # rmse_fn = metrics_dop.get_metric("rmse") # You'd need to implement rmse or derive from mse
+        #     # For RMSE, you'd typically use unweighted MSE first, then sqrt
+        #     unweighted_mse_values = metrics_dop.mse(all_preds, all_targets, torch.ones_like(all_preds), mask=None)
+        #     rmse_value = torch.sqrt(torch.mean(unweighted_mse_values))
+        #     log_dict_epoch_metrics[f"val_rmse_{obs_key}"] = rmse_value
 
-        self.log_dict(log_dict_epoch_metrics, sync_dist=True)
+        # self.log_dict(log_dict_epoch_metrics, sync_dist=True)
         self.validation_step_outputs.clear() # Important!
 
     def test_step(self, batch, batch_idx):
