@@ -179,9 +179,6 @@ if __name__ == "__main__":
     # CONUS data path:
     data_path = "/scratch3/NCEPDEV/stmp/Xin.C.Jin/data/ocelot/data_v2/"
 
-    start_date = "2024-04-01"
-    end_date = "2024-04-04"
-
     # Observation configuration, will move to a config file later.
     observation_config = {
         "satellite": {
@@ -224,7 +221,7 @@ if __name__ == "__main__":
         "lr": 0.0001,
         "graph": "hetero",
         "hidden_dim": 64,
-        "hidden_layers": 16,
+        "hidden_layers": 32,
         "mesh_resolution": 4,
         "cutoff_factor": 0.67,
         "num_neighbors": 2,

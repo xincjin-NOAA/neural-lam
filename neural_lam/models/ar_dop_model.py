@@ -348,13 +348,12 @@ class ARDOPModel(pl.LightningModule):
         """
         observations = batch[0]
         for obs_type in observations:
-            target_features_dict[obs_type] = {}
             for inst_name in observations[obs_type]:
                 bin_data = observations[obs_type][inst_name] 
                 target_lat_deg = bin_data["target_lat_deg"]
                 target_lon_deg = bin_data["target_lon_deg"]
-                predicted = predicted_dict[obs_type][inst_name]
-                target = target_dict[obs_type][inst_name]
+                predicted = predicted_dict[obs_type][inst_name].cpu()
+                target = target_dict[obs_type][inst_name].cpu()
 
                 # # Rescale to original data scale
                 # prediction_rescaled = prediction * self.data_std + self.data_mean
@@ -362,12 +361,12 @@ class ARDOPModel(pl.LightningModule):
 
         
                 vis.plot_hist(f'{obs_type}_{inst_name}',
-                        (predicted, target)
+                        (predicted[:,0].detach().numpy(), target[:,0].detach().numpy())
                     )
                 vis.plot_map(f'{obs_type}_{inst_name}',
                         target_lon_deg,
                         target_lat_deg,
-                        (predicted, target),
+                        (predicted[:,0].detach().numpy(), target[:,0].detach().numpy()),
                     )
         plt.close(
             "all"
