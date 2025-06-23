@@ -168,11 +168,11 @@ def plot_spatial_error(error, obs_mask, data_config, title=None, vrange=None):
 
 
 def plot_hist(var_name, data):
-    n = len(data)
-    mean = np.mean(data)
-    std = np.std(data)
-    mx = np.max(data)
-    mn = np.min(data)
+    n = len(data[0])
+    mean = np.mean(data[0])
+    std = np.std(data[0])
+    mx = np.max(data[0])
+    mn = np.min(data[0])
     
     # Make proper bin sizes using the equation max-min/sqrt(n). Then
     # extend the bin range to 4x the standard deviation
@@ -183,8 +183,9 @@ def plot_hist(var_name, data):
     # Now plot figure
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    ax.hist(data, bins=20)
-    
+    ax.hist(data[0], bins=20)
+    ax.hist(data[1], bins=20)
+
     # Add labels
     plt.xlabel(var_name)
     plt.ylabel('Count')
@@ -198,7 +199,7 @@ def plot_hist(var_name, data):
     # plt.title(var_name)
     dpi=150
     plt.tight_layout()
-    pngfile = f'figures/error_ratio_inv_hist_{var_name}.png'
+    pngfile = f'figures/hist_{var_name}.png'
     fig.savefig(pngfile)
 
 
@@ -207,10 +208,10 @@ def plot_map(var_name, x, y, z, title='title'):
     xmax = x.max()
     ymin = y.min()
     ymax = y.max()
-    zmin = z.min()
-    zmax = z.max()
-    zstd = z.std()
-    zavg = z.mean()
+    zmin = z[0].min()
+    zmax = z[0].max()
+    zstd = z[0].std()
+    zavg = z[0].mean()
     # zcnt = z.size()
     # Set colorbar
     cmax =  zmax
@@ -223,38 +224,40 @@ def plot_map(var_name, x, y, z, title='title'):
 
     fig = plt.figure(figsize=(12,8))
     
-    # Initialize the plot pointing to the project
-    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-    
-    # Get scatter data
-    sc = ax.scatter(x, y,
-                    c=z, s=1.5, marker="o", linewidth=6, alpha=1.0, vmin=cmin, vmax=cmax,
-                    transform=ccrs.PlateCarree(), cmap=cmap, norm=None, edgecolor='none', antialiased=True)
-    
-    # Plot colorbar
-    cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", pad=0.1, fraction=0.15, aspect=40, extend='both')
-    cbar.ax.set_xlabel(units, fontsize=10, loc='right')
-    
-    # Plot globally
-    # ax.set_global()
+    for i in range(2):
+        # Initialize the plot pointing to the project
+        ax = fig.add_subplot(1, 2, i+1, projection=ccrs.PlateCarree())
+        
+        # Get scatter data
+        sc = ax.scatter(x, y,
+                        c=z[i], s=1.5, marker="o", linewidth=6, alpha=1.0, vmin=cmin, vmax=cmax,
+                        transform=ccrs.PlateCarree(), cmap=cmap, norm=None, edgecolor='none', antialiased=True)
+        
+        # Plot colorbar
+        cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", pad=0.1, fraction=0.15, aspect=40, extend='both')
+        cbar.ax.set_xlabel(units, fontsize=10, loc='right')
+        
+        # Plot globally
+        # ax.set_global()
 
-    # Add land and ocean
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
-    
-    # Add gridlines
-    gline=ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False, color='lightgray', alpha=0.5, linewidth=1.0, linestyle='--')
-    gline.top_labels=False
-    gline.right_labels=False
-    
-    # Get title and png file from the input filename
-    
-    title = f'{title}'
-    # Add figure labels
-    ax.set_title(title, pad=15, fontsize=20)
-    #   text = f"Total Count: {zcnt:0.0f}     Max: {zmax:0.3f}     Min: {zmin:0.3f}     Mean: {zavg:0.3f}     Std: {zstd:0.3f} {units}"
-    text = f"     Max: {zmax:0.3f}     Min: {zmin:0.3f}     Mean: {zavg:0.3f}     Std: {zstd:0.3f}"
-    ax.text(0.2, -0.1, text, transform=ax.transAxes, va='bottom', fontsize=12)
+        # Add land and ocean
+        ax.add_feature(cfeature.LAND)
+        ax.add_feature(cfeature.OCEAN)
+        
+        # Add gridlines
+        gline=ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False, color='lightgray', alpha=0.5, linewidth=1.0, linestyle='--')
+        gline.top_labels=False
+        gline.right_labels=False
+        
+        # Get title and png file from the input filename
+        
+        title = f'{title}'
+        # Add figure labels
+        ax.set_title(title, pad=15, fontsize=20)
+        #   text = f"Total Count: {zcnt:0.0f}     Max: {zmax:0.3f}     Min: {zmin:0.3f}     Mean: {zavg:0.3f}     Std: {zstd:0.3f} {units}"
+        text = f"     Max: {zmax:0.3f}     Min: {zmin:0.3f}     Mean: {zavg:0.3f}     Std: {zstd:0.3f}"
+        ax.text(0.2, -0.1, text, transform=ax.transAxes, va='bottom', fontsize=12)
+
     dpi=150
     plt.tight_layout()
     pngfile = f'figures/map_{var_name}.png'

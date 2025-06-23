@@ -338,99 +338,40 @@ class ARDOPModel(pl.LightningModule):
                 batch, n_additional_examples, prediction=prediction
             )
 
-    def plot_examples(self, batch, n_examples, prediction=None):
+    def plot_examples(self, batch, target_dict, predicted_dict):
         """
         Plot the first n_examples forecasts from batch
 
         batch: batch with data to plot corresponding forecasts for
-        n_examples: number of forecasts to plot
-        prediction: (B, pred_steps, num_grid_nodes, d_f), existing prediction.
-            Generate if None.
+        target_dict: target data dictionary
+        predicted_dict: predicted data dictionary
         """
-        if prediction is None:
-            prediction, target = self.common_step(batch)
+        observations = batch[0]
+        for obs_type in observations:
+            target_features_dict[obs_type] = {}
+            for inst_name in observations[obs_type]:
+                bin_data = observations[obs_type][inst_name] 
+                target_lat_deg = bin_data["target_lat_deg"]
+                target_lon_deg = bin_data["target_lon_deg"]
+                predicted = predicted_dict[obs_type][inst_name]
+                target = target_dict[obs_type][inst_name]
 
-        target = batch[1]
+                # # Rescale to original data scale
+                # prediction_rescaled = prediction * self.data_std + self.data_mean
+                # target_rescaled = target * self.data_std + self.data_mean
 
-        # Rescale to original data scale
-        prediction_rescaled = prediction * self.data_std + self.data_mean
-        target_rescaled = target * self.data_std + self.data_mean
-
-        # Iterate over the examples
-        for pred_slice, target_slice in zip(
-            prediction_rescaled[:n_examples], target_rescaled[:n_examples]
-        ):
-            # Each slice is (pred_steps, num_grid_nodes, d_f)
-            self.plotted_examples += 1  # Increment already here
-
-            var_vmin = (
-                torch.minimum(
-                    pred_slice.flatten(0, 1).min(dim=0)[0],
-                    target_slice.flatten(0, 1).min(dim=0)[0],
-                )
-                .cpu()
-                .numpy()
-            )  # (d_f,)
-            var_vmax = (
-                torch.maximum(
-                    pred_slice.flatten(0, 1).max(dim=0)[0],
-                    target_slice.flatten(0, 1).max(dim=0)[0],
-                )
-                .cpu()
-                .numpy()
-            )  # (d_f,)
-            var_vranges = list(zip(var_vmin, var_vmax))
-
-            # Iterate over prediction horizon time steps
-            for t_i, (pred_t, target_t) in enumerate(
-                zip(pred_slice, target_slice), start=1
-            ):
-                # Create one figure per variable at this time step
-                var_figs = [
-                    vis.plot_prediction(
-                        pred_t[:, var_i],
-                        target_t[:, var_i],
-                        self.interior_mask[:, 0],
-                        self.config_loader,
-                        title=f"{var_name} ({var_unit}), "
-                        f"t={t_i} ({self.step_length * t_i} h)",
-                        vrange=var_vrange,
+        
+                vis.plot_hist(f'{obs_type}_{inst_name}',
+                        (predicted, target)
                     )
-                    for var_i, (var_name, var_unit, var_vrange) in enumerate(
-                        zip(
-                            self.config_loader.dataset.var_names,
-                            self.config_loader.dataset.var_units,
-                            var_vranges,
-                        )
+                vis.plot_map(f'{obs_type}_{inst_name}',
+                        target_lon_deg,
+                        target_lat_deg,
+                        (predicted, target),
                     )
-                ]
-
-                example_i = self.plotted_examples
-                wandb.log(
-                    {
-                        f"{var_name}_example_{example_i}": wandb.Image(fig)
-                        for var_name, fig in zip(
-                            self.config_loader.dataset.var_names, var_figs
-                        )
-                    }
-                )
-                plt.close(
-                    "all"
-                )  # Close all figs for this time step, saves memory
-
-            # Save pred and target as .pt files
-            torch.save(
-                pred_slice.cpu(),
-                os.path.join(
-                    wandb.run.dir, f"example_pred_{self.plotted_examples}.pt"
-                ),
-            )
-            torch.save(
-                target_slice.cpu(),
-                os.path.join(
-                    wandb.run.dir, f"example_target_{self.plotted_examples}.pt"
-                ),
-            )
+        plt.close(
+            "all"
+        )  # Close all figs for this time step, saves memory
 
     def create_metric_log_dict(self, metric_tensor, prefix, metric_name):
         """

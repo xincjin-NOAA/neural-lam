@@ -254,6 +254,8 @@ class HeteroObservationGraphModel(ARDOPModel): # Or pl.LightningModule if not in
             'loss': batch_loss.detach(), 
             'metrics_data': outputs_for_metrics
         })
+
+        self.plot_examples(batch, target_features_dict, predictions_dict)
         # No explicit return needed if self.validation_step_outputs is used in on_validation_epoch_end
 
     def on_validation_epoch_end(self):
